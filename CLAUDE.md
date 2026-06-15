@@ -31,6 +31,15 @@ the Claude/user side.
 Ubuntu-based Docker container, non-root `forpost` user in `docker` group,
 bash/git/gh/docker-compose, FastAPI + MCP wrapper, Caddy/nginx for HTTPS.
 
+## Testing
+
+Every phase of the build plan must include tests before moving to the next
+phase. For each new piece of functionality (auth, mode logic, execute_command,
+logging), write tests that cover the happy path and the main failure modes
+(missing/invalid API key, rejected command in read-only mode, command not
+in whitelist, etc.). Run tests after each phase and fix failures before
+proceeding. Use pytest.
+
 ## What NOT to do
 
 - Don't add `write_file` as a separate tool - heredoc via execute_command covers it
