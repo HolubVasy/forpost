@@ -17,7 +17,22 @@ on any device.
 | `whitelist` | Command must match an entry in `whitelist.config`. |
 | `full-access` | Anything runs, immediately, no confirmation. |
 
-## Setup
+## Local Development
+
+1. Create a Python virtualenv, `pip install -r requirements.txt`
+2. Copy `.env.example` to `.env`, fill with dummy values (e.g.
+   `API_KEY=dev-local-key`) - no real secrets needed locally
+3. Run the service: `uvicorn app.main:app --reload`
+4. Run tests: `pytest`
+5. Smoke test manually:
+   ```
+   curl -X POST http://localhost:8000/execute \
+     -H "X-API-Key: dev-local-key" \
+     -H "Content-Type: application/json" \
+     -d '{"command": "echo hello", "mode": "read-only"}'
+   ```
+
+## Setup (VPS / Production)
 
 1. Clone this repo to your VPS
 2. Copy `.env.example` to `.env`, fill in:

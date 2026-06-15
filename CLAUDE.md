@@ -31,6 +31,15 @@ the Claude/user side.
 Ubuntu-based Docker container, non-root `forpost` user in `docker` group,
 bash/git/gh/docker-compose, FastAPI + MCP wrapper, Caddy/nginx for HTTPS.
 
+## Local Development Environment
+
+During development (Phase 1-2), ForPost runs locally, not on the VPS.
+Create a local `.env` with dummy/placeholder values (e.g.
+`API_KEY=dev-local-key`, `GITHUB_TOKEN=` left empty unless gh-dependent
+code is being tested). Never ask for or use real VPS credentials during
+local development - real secrets only exist in `.env` on the VPS itself
+(Phase 4+).
+
 ## Testing
 
 Every phase of the build plan must include tests before moving to the next
