@@ -136,9 +136,107 @@ scoped user account.
 8. Occasionally run a one-off command that doesn't fit any category above
    (debugging, cleanup, exploration).
 
+## File Operations (Reconsidered, 2026-06-15)
+
+Earlier decision was "no write_file, heredoc covers it." This holds for
+small text files (Python, YAML, .env, configs). It breaks down for:
+- Binary files (PDFs, images) - heredoc + base64 is workable but painful
+- Large files - long single command strings are fragile (escaping, length limits)
+
+**Revised approach:** Add explicit file operations alongside execute_command:
+
+- `write_file(path, content, encoding)` - encoding is "text" or "base64".
+  Text for code/config, base64 for binaries (PDFs, etc.)
+- `read_file(path, encoding)` - mirror of write_file, for reading back
+  binaries or large files without dumping them through stdout
+- `delete_file(path)` - explicit removal, logged like any other operation
+
+These are still simple primitives, not smart logic - they read/write
+bytes to a path within `/home/forpost/`, subject to the same mode rules
+as execute_command (read-only = read_file only, whitelist/full-access
+allow writes per mode rules).
+
+**Still no change to the core principle**: ForPost executes and returns,
+no interpretation. File ops are just a more efficient transport for
+content than cramming everything through command strings.
+
+**Logging**: file operations get their own line in commands.jsonl too
+(operation type "write_file"/"read_file"/"delete_file", path, size,
+mode) - same audit trail, different operation type.
+
+**Status**: this extends Phase 1 scope slightly. If Phase 1 is already
+complete or far along, treat this as Phase 1.5 / early Phase 2 addition
+rather than reopening finished work.
+
+**Editing existing files (common workflow)**: "fix this script, it's
+failing" = `read_file(path)` -> Claude edits content -> `write_file(path,
+new_content)`. No separate `update_file` tool needed - read+write covers
+edits. This is the same pattern as local file editing, just over the
+ForPost transport.
+
+## Rate Limiting (2026-06-15)
+
+No retry logic - if a request fails, it returns an error as-is (per
+"no auto-fix" principle). However, a simple rate limit protects against
+runaway request loops (a bug in the caller sending requests too fast,
+not malicious traffic).
+
+- Configurable via `.env`, e.g. `RATE_LIMIT_PER_MINUTE=60`
+- Default: 60 requests per minute
+- Exceeding the limit returns 429, request not executed, logged to app.log
+- This is "protection from self" (same framing as the whitelist) - a
+  safety net against accidental loops, not a security feature against
+  external abuse (API key is the security boundary)
+
+## Response Format (2026-06-15, clarification)
+
+Response is a simple JSON object with plaintext fields - no nested
+schemas, no special encoding beyond what's needed for file operations
+(base64 for binary content in read_file/write_file, per File Operations
+section above).
+
+```json
+{
+  "stdout": "...",
+  "stderr": "...",
+  "exit_code": 0
+}
+```
+
+For file operations, response includes the relevant field (e.g. content
+for read_file, success/path for write_file). No further structure -
+plaintext is the default, keep it simple.
+
+## Command Timeout (2026-06-15)
+
+Every command run via execute_command has a hard timeout of **5 minutes**,
+hardcoded (not configurable via .env). If the process doesn't finish
+within 5 minutes, Forpost kills it and returns whatever stdout/stderr
+was captured so far, plus a status indicating "timed out".
+
+This stays synchronous - one request, one response. No request IDs, no
+polling, no separate kill endpoint. If something hangs, the timeout
+auto-kills it and Claude sees "timed out" in the response, then can
+follow up (e.g. `docker ps` to check for leftover processes).
+
+## Workspace Cleanup (2026-06-15)
+
+`/home/forpost/workspace/` accumulates temporary files (code written via
+write_file before pushing to GitHub). Beyond the per-task cleanup
+(rm after push), a system-level cron job on the VPS independently removes
+anything older than 1 day:
+
+```
+0 3 * * * find /home/forpost/workspace -mtime +1 -delete
+```
+
+This is plain VPS cron, not part of Forpost itself - works regardless of
+whether Forpost is running, restarted, or crashed.
+
 ## Status
 
-Spec complete. Ready to build.
+Spec complete (with File Operations addition above). Ready to build /
+continue building.
 
 ## Build Plan
 
@@ -167,7 +265,7 @@ Spec complete. Ready to build.
 ### Phase 4: Deployment
 1. Provision dedicated GitHub bot account + token
 2. Deploy container to VPS
-3. Configure domain + Let's Encrypt HTTPS (reverse proxy: Caddy or nginx)
+3. Configure domain + HTTPS via existing nginx reverse proxy (certbot)
 4. Smoke test: read-only `docker ps` from outside
 
 ### Phase 5: Integration

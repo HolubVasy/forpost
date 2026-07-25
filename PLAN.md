@@ -17,22 +17,25 @@ applies mode logic, executes, logs, and returns the result.
 Build and test incrementally - do not write all modules then test at
 the end. Each step below includes its own test pass before moving on.
 
-- [ ] 1a. Scaffold `app/` package structure, `requirements.txt`
+- [x] 1a. Scaffold `app/` package structure, `requirements.txt`
       (fastapi, uvicorn, pydantic, python-dotenv, pytest)
-- [ ] 1b. `app/auth.py` - API key dependency, 401 on missing/invalid
+- [x] 1b. `app/auth.py` - API key dependency, 401 on missing/invalid
       -> write + run `test_auth.py`, must pass before continuing
-- [ ] 1c. `whitelist.config` + `app/modes.py` - read-only / whitelist /
+- [x] 1c. `whitelist.config` + `app/modes.py` - read-only / whitelist /
       full-access decision logic
       -> write + run `test_modes.py`, must pass before continuing
-- [ ] 1d. `app/executor.py` - subprocess execution, capture
+- [x] 1d. `app/executor.py` - subprocess execution, capture
       stdout/stderr/exit_code
       -> write + run `test_executor.py`, must pass before continuing
-- [ ] 1e. `app/logging_config.py` - writers for `logs/commands.jsonl`
+- [x] 1e. `app/logging_config.py` - writers for `logs/commands.jsonl`
       and `logs/app.log`
       -> write + run `test_logging.py`, must pass before continuing
-- [ ] 1f. `app/main.py` - wire auth -> modes -> executor -> logging
+- [x] 1f. `app/main.py` - wire auth -> modes -> executor -> logging
       together, single POST endpoint
       -> write + run `test_main.py` (integration), must pass
+- [x] 1g. (SPEC additions) `app/file_ops.py` + write/read/delete_file
+      endpoints, `app/rate_limit.py` (429), 5-min command timeout
+      -> `test_file_ops.py`, `test_rate_limit.py` pass
 
 **Exit criteria:** `uvicorn app.main:app --reload` runs locally. `curl
 -X POST` with valid key + read-only mode + a safe command (e.g. `echo
@@ -43,12 +46,18 @@ command in read-only mode is rejected. All Phase 1 tests green.
 
 Goal: expose the same functionality as an MCP tool Claude can call.
 
-- [ ] `app/mcp_server.py` - MCP tool definition for `execute_command(command, mode)`
-- [ ] Verify MCP tool schema is valid (local test/inspection)
-- [ ] Tests for Phase 2
+- [x] `app/mcp_server.py` - FastMCP wrapper exposing `execute_command(command, mode)`
+      plus file-op tools `write_file_tool` / `read_file_tool` / `delete_file_tool`.
+      Reuses the Phase-1 logic (validate_command, execute, file_ops, logging,
+      rate_limiter) - no duplicated rules.
+- [x] Verify MCP tool schema is valid (local test/inspection)
+- [x] Tests for Phase 2 (`test_mcp_server.py` - 14 tests)
 
 **Exit criteria:** MCP tool schema loads without errors; tool call maps
-to the same logic as the HTTP endpoint.
+to the same logic as the HTTP endpoint. ✅ met (97 tests green).
+
+Run the MCP server: `python -m app.mcp_server` (stdio by default;
+set `MCP_TRANSPORT=streamable-http` for remote/VPS use).
 
 ## Phase 3: Containerization
 
