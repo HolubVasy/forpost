@@ -52,6 +52,32 @@ class TestCommandLogging:
         datetime.fromisoformat(entry["timestamp"])
 
 
+class TestRedactionAndTrim:
+    def test_secrets_redacted(self, logs_dir):
+        log_command(
+            "echo",
+            "full-access",
+            0,
+            "key sk-or-v1-abcdefghijklmnopqrstuvwxyz1234 and ghp_ABCDEFGHIJKLMNOPQRSTUV",
+            "",
+        )
+        content = (logs_dir / "commands.jsonl").read_text()
+        assert "sk-or-v1-abcdefghijklmnopqrstuvwxyz1234" not in content
+        assert "ghp_ABCDEFGHIJKLMNOPQRSTUV" not in content
+        assert "REDACTED" in content
+
+    def test_commands_log_trims_on_overflow(self, logs_dir, monkeypatch):
+        monkeypatch.setenv("MAX_LOG_BYTES", "500")
+        monkeypatch.setenv("LOG_TRIM_FRACTION", "0.5")
+        for i in range(200):
+            log_command(f"cmd{i}", "read-only", 0, "x" * 10, "")
+        p = logs_dir / "commands.jsonl"
+        assert p.stat().st_size < 3000  # bounded, not 200 * entry
+        text = p.read_text()
+        assert "cmd199" in text  # newest kept
+        assert "cmd0" not in text  # oldest dropped
+
+
 class TestAppLogging:
     def test_app_logger_writes_to_file(self, logs_dir):
         logger = get_app_logger()

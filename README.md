@@ -68,7 +68,7 @@ Nine tools, exposed both as MCP tools (for the connector) and as REST endpoints
 | `read_file_tool(path, mode, encoding?, offset?, length?)` | Read a bounded slice of a file (any mode); paginate big files via `offset`/`next_offset`. |
 | `delete_file_tool(path, mode)` | Delete a file. **full-access only.** |
 | `diagnostics()` | One-call health snapshot: alive?, memory, jobs (running/stuck), tool versions, recent failures. Also `GET /diagnostics`. |
-| `reset(scope)` | Reset own state: `scope`=`jobs` (kill+wipe jobs & their logs) / `logs` (truncate command+app logs) / `all`. Also `POST /reset`. |
+| `reset(scope)` | Reset own state: `scope`=`jobs` (kill+wipe jobs & their logs) / `logs` (truncate command+app logs) / `workspace` (delete scratch) / `all` (full cleanup). Also `POST /reset`. |
 
 ## Modes
 

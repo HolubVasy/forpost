@@ -88,7 +88,15 @@ class TestDiagnostics:
 
     def test_reset_all_scope(self):
         result = service.reset("all")
-        assert "jobs_cleared" in result and "logs_cleared" in result
+        assert "jobs_cleared" in result
+        assert "logs_cleared" in result
+        assert "workspace_cleared" in result
+
+    def test_reset_workspace(self, env):
+        (env / "ws" / "scratch.txt").write_text("x")
+        result = service.reset("workspace")
+        assert result["workspace_cleared"] >= 1
+        assert not (env / "ws" / "scratch.txt").exists()
 
     def test_reset_bad_scope(self):
         with pytest.raises(ForPostError) as e:

@@ -313,8 +313,9 @@ def reset(scope: str = "jobs") -> dict:
 
     Args:
         scope: "jobs" - kill all running jobs + wipe job state and job logs;
-               "logs" - truncate the command + app logs;
-               "all"  - both.
+               "logs" - truncate command + app logs (and rotated backups);
+               "workspace" - delete everything under the managed workspace;
+               "all" - full cleanup (jobs + logs + workspace).
 
     Returns what was cleared.
     """

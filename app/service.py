@@ -113,7 +113,7 @@ def delete(path: str, mode: Mode) -> dict:
 
 
 def _clear_logs() -> list:
-    """Truncate ForPost's own logs (commands.jsonl + app.log)."""
+    """Truncate the command + app logs and remove rotated backups."""
     logs_dir = Path(os.environ.get("LOGS_DIR", "logs"))
     cleared = []
     for name in ("commands.jsonl", "app.log"):
@@ -124,24 +124,54 @@ def _clear_logs() -> list:
                 cleared.append(name)
         except OSError:
             pass
+        for backup in logs_dir.glob(name + ".*"):  # rotated app.log.1 etc.
+            try:
+                backup.unlink()
+                cleared.append(backup.name)
+            except OSError:
+                pass
     return cleared
+
+
+def _clear_workspace() -> int:
+    """Remove everything under the managed workspace (scratch files)."""
+    import shutil
+
+    root = _get_workspace_root()
+    removed = 0
+    try:
+        for item in root.iterdir():
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+                removed += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return removed
 
 
 def reset(scope: str = "jobs") -> dict:
     """Reset ForPost's own state (never touches the host).
 
     scope:
-      - "jobs" : kill all running jobs + wipe job state and job logs
-      - "logs" : truncate the command + app logs
-      - "all"  : both of the above
+      - "jobs"      : kill all running jobs + wipe job state and job logs
+      - "logs"      : truncate command + app logs (and rotated backups)
+      - "workspace" : delete everything under the managed workspace
+      - "all"       : full cleanup - jobs + logs + workspace
     """
-    if scope not in ("jobs", "logs", "all"):
-        raise ForPostError(400, "scope must be one of: jobs, logs, all")
+    if scope not in ("jobs", "logs", "workspace", "all"):
+        raise ForPostError(400, "scope must be one of: jobs, logs, workspace, all")
     result = {"scope": scope}
     if scope in ("jobs", "all"):
         result["jobs_cleared"] = job_manager.purge()
     if scope in ("logs", "all"):
         result["logs_cleared"] = _clear_logs()
+    if scope in ("workspace", "all"):
+        result["workspace_cleared"] = _clear_workspace()
     return result
 
 
