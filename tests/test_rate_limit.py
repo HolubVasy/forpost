@@ -1,8 +1,11 @@
 """Tests for rate limiting."""
 
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -76,6 +79,29 @@ class TestRateLimit:
     def test_default_limit_is_60(self, monkeypatch):
         monkeypatch.delenv("RATE_LIMIT_PER_MINUTE", raising=False)
         assert rate_limiter.limit == 60
+
+    def test_thread_safe_under_concurrency(self, monkeypatch):
+        """check() is called from worker threads; the lock must keep the count
+        exact (no lost/duplicated slots) under concurrency."""
+        monkeypatch.setenv("RATE_LIMIT_PER_MINUTE", "50")
+        rate_limiter._requests = []
+        counters = {"ok": 0, "limited": 0}
+        lock = threading.Lock()
+
+        def hit(_):
+            try:
+                rate_limiter.check()
+                with lock:
+                    counters["ok"] += 1
+            except HTTPException:
+                with lock:
+                    counters["limited"] += 1
+
+        with ThreadPoolExecutor(max_workers=20) as ex:
+            list(ex.map(hit, range(200)))
+
+        assert counters["ok"] == 50  # exactly the limit, not more/less
+        assert counters["ok"] + counters["limited"] == 200
 
     def test_rate_limit_applies_after_auth(self, client, monkeypatch):
         """Invalid API key returns 401, not 429, even if limit exceeded."""

@@ -50,13 +50,16 @@ def list_tools():
 
 
 class TestSchema:
-    def test_all_four_tools_exposed(self):
+    def test_all_tools_exposed(self):
         names = {t.name for t in list_tools()}
         assert names == {
             "execute_command",
             "write_file_tool",
             "read_file_tool",
             "delete_file_tool",
+            "run_async",
+            "job_status",
+            "job_kill",
         }
 
     def test_execute_command_schema(self):
@@ -77,6 +80,31 @@ class TestSchema:
         }
         # encoding has a default, so only path/content/mode are required
         assert set(write.inputSchema["required"]) == {"path", "content", "mode"}
+
+
+class TestDescriptiveMetadata:
+    """The MCP surface must be self-describing for third-party clients."""
+
+    def test_server_has_instructions(self):
+        instr = getattr(mcp, "instructions", None)
+        assert instr and "MODES" in instr and "run_async" in instr
+
+    def test_every_tool_has_title_and_annotations(self):
+        for t in list_tools():
+            assert t.title, f"{t.name} missing title"
+            assert t.annotations is not None, f"{t.name} missing annotations"
+
+    def test_annotation_hints_are_sane(self):
+        tools = {t.name: t.annotations for t in list_tools()}
+        assert tools["read_file_tool"].readOnlyHint is True
+        assert tools["job_status"].readOnlyHint is True
+        assert tools["execute_command"].destructiveHint is True
+        assert tools["delete_file_tool"].destructiveHint is True
+
+    def test_manual_resource_exposed(self):
+        resources = run(mcp.list_resources())
+        uris = {str(r.uri) for r in resources}
+        assert "forpost://manual" in uris
 
 
 class TestExecuteCommand:

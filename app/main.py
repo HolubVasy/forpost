@@ -20,6 +20,7 @@ def _clamp_timeout(requested: int) -> int:
 from app.auth import get_api_key, keys_match, verify_api_key
 from app.executor import execute
 from app.file_ops import FileEncoding, delete_file, read_file, write_file
+from app.jobs import job_manager
 from app.logging_config import get_app_logger, log_command, log_file_operation
 from app.mcp_server import mcp
 from app.modes import Mode, validate_command
@@ -31,12 +32,24 @@ from app.rate_limit import rate_limiter
 mcp_app = mcp.streamable_http_app()
 
 
-class MCPApiKeyGuard:
-    """ASGI middleware requiring a valid X-API-Key on the mounted /mcp app.
+async def _send_json_error(send, status: int, message: str) -> None:
+    body = f'{{"error":{message!r}}}'.encode()
+    await send({
+        "type": "http.response.start",
+        "status": status,
+        "headers": [(b"content-type", b"application/json")],
+    })
+    await send({"type": "http.response.body", "body": body})
 
-    The FastAPI dependency (verify_api_key) only guards the REST routes; the
-    mounted MCP sub-app bypasses it, so without this every MCP call would be
-    unauthenticated. Same static-key model as the rest of ForPost.
+
+class MCPApiKeyGuard:
+    """ASGI middleware guarding the mounted /mcp app with auth + rate limiting.
+
+    The FastAPI dependency (verify_api_key) and the /execute rate-limit only
+    cover the REST routes; the mounted MCP sub-app bypasses both, so without
+    this every MCP call (incl. protocol chatter, not just tool executions)
+    would be unauthenticated and unthrottled. This applies the same static-key
+    model and the same rate limiter to all of /mcp.
     """
 
     def __init__(self, app):
@@ -52,15 +65,12 @@ class MCPApiKeyGuard:
                 expected = None
             if not expected or not keys_match(provided, expected):
                 get_app_logger().warning("MCP request rejected: missing/invalid API key")
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"application/json")],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b'{"error":"Missing or invalid API key"}',
-                })
+                await _send_json_error(send, 401, "Missing or invalid API key")
+                return
+            try:
+                rate_limiter.check()
+            except HTTPException as exc:
+                await _send_json_error(send, exc.status_code, str(exc.detail))
                 return
         await self.app(scope, receive, send)
 
@@ -119,8 +129,9 @@ async def execute_command(
     result = await run_in_threadpool(execute, request.command, timeout)
     timed_out = result.exit_code == -1
 
-    # Log the command execution
-    log_command(
+    # Log the command execution (blocking file append -> threadpool)
+    await run_in_threadpool(
+        log_command,
         command=request.command,
         mode=request.mode.value,
         exit_code=result.exit_code,
@@ -183,8 +194,12 @@ async def write_file_endpoint(
     if request.mode == Mode.READ_ONLY:
         raise HTTPException(status_code=403, detail="write_file not allowed in read-only mode")
 
-    result = write_file(request.path, request.content, request.encoding)
-    log_file_operation("write_file", result["path"], request.mode.value, result["size"])
+    result = await run_in_threadpool(
+        write_file, request.path, request.content, request.encoding
+    )
+    await run_in_threadpool(
+        log_file_operation, "write_file", result["path"], request.mode.value, result["size"]
+    )
     return WriteFileResponse(**result)
 
 
@@ -196,8 +211,10 @@ async def read_file_endpoint(
     rate_limiter.check()
 
     # read_file is allowed in all modes
-    result = read_file(request.path, request.encoding)
-    log_file_operation("read_file", result["path"], request.mode.value, result["size"])
+    result = await run_in_threadpool(read_file, request.path, request.encoding)
+    await run_in_threadpool(
+        log_file_operation, "read_file", result["path"], request.mode.value, result["size"]
+    )
     return ReadFileResponse(**result)
 
 
@@ -212,6 +229,73 @@ async def delete_file_endpoint(
     if request.mode == Mode.READ_ONLY:
         raise HTTPException(status_code=403, detail="delete_file not allowed in read-only mode")
 
-    result = delete_file(request.path)
-    log_file_operation("delete_file", result["path"], request.mode.value)
+    result = await run_in_threadpool(delete_file, request.path)
+    await run_in_threadpool(
+        log_file_operation, "delete_file", result["path"], request.mode.value
+    )
     return DeleteFileResponse(**result)
+
+
+# --- Background jobs (async model for long-running commands) ---
+
+
+class RunAsyncRequest(BaseModel):
+    command: str
+    mode: Mode
+    timeout: int = 1800
+
+
+class JobStatusRequest(BaseModel):
+    job_id: str
+    offset: int = 0
+
+
+class JobKillRequest(BaseModel):
+    job_id: str
+
+
+@app.post("/run_async")
+async def run_async_endpoint(
+    request: RunAsyncRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    rate_limiter.check()
+    allowed, reason = validate_command(request.command, request.mode)
+    if not allowed:
+        logger.warning(f"Async command rejected: {reason}")
+        raise HTTPException(status_code=403, detail=reason)
+    timeout = _clamp_timeout(request.timeout)
+    job_id = await run_in_threadpool(job_manager.start, request.command, timeout)
+    await run_in_threadpool(
+        log_command,
+        command=request.command,
+        mode=request.mode.value,
+        exit_code=0,
+        stdout=f"[async job started: {job_id}]",
+        stderr="",
+    )
+    return {"job_id": job_id, "status": "running"}
+
+
+@app.post("/job_status")
+async def job_status_endpoint(
+    request: JobStatusRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    rate_limiter.check()
+    try:
+        return await run_in_threadpool(job_manager.status, request.job_id, request.offset)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No such job: {request.job_id}")
+
+
+@app.post("/job_kill")
+async def job_kill_endpoint(
+    request: JobKillRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    rate_limiter.check()
+    try:
+        return await run_in_threadpool(job_manager.kill, request.job_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"No such job: {request.job_id}")

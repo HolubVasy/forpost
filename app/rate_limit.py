@@ -1,16 +1,23 @@
 """Simple in-memory rate limiter for ForPost."""
 
 import os
+import threading
 import time
 
 from fastapi import HTTPException
 
 
 class RateLimiter:
-    """Token-bucket-style rate limiter. One bucket (single-user system)."""
+    """Token-bucket-style rate limiter. One bucket (single-user system).
+
+    Thread-safe: `check()` runs from FastAPI worker threads (execute is offloaded
+    via run_in_threadpool) and from FastMCP's tool threads, so the shared window
+    is mutated under a lock.
+    """
 
     def __init__(self):
         self._requests: list[float] = []
+        self._lock = threading.Lock()
 
     @property
     def limit(self) -> int:
@@ -20,11 +27,12 @@ class RateLimiter:
         """Raise 429 if rate limit exceeded, otherwise record the request."""
         now = time.time()
         window_start = now - 60.0
-        # Prune old entries
-        self._requests = [t for t in self._requests if t > window_start]
-        if len(self._requests) >= self.limit:
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-        self._requests.append(now)
+        with self._lock:
+            # Prune old entries
+            self._requests = [t for t in self._requests if t > window_start]
+            if len(self._requests) >= self.limit:
+                raise HTTPException(status_code=429, detail="Rate limit exceeded")
+            self._requests.append(now)
 
 
 rate_limiter = RateLimiter()

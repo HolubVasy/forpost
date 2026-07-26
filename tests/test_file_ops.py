@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 
 import pytest
 from fastapi.testclient import TestClient
@@ -145,6 +146,23 @@ class TestReadFile:
             headers=HEADERS,
         )
         assert resp.status_code == 403
+
+    @pytest.mark.skipif(
+        os.name == "nt", reason="symlink creation needs privileges on Windows"
+    )
+    def test_read_symlink_escape_blocked(self, client, setup_env):
+        # A symlink inside the workspace pointing outside must not be followable.
+        outside = setup_env / "outside_secret.txt"
+        outside.write_text("SECRET")
+        link = setup_env / "workspace" / "link"
+        os.symlink(str(outside), link)
+        resp = client.post(
+            "/read_file",
+            json={"path": "link", "mode": "read-only"},
+            headers=HEADERS,
+        )
+        assert resp.status_code == 403
+        assert "escapes" in resp.json()["detail"]
 
 
 class TestDeleteFile:

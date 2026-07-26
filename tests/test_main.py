@@ -1,6 +1,7 @@
 """Integration tests for the ForPost API endpoint."""
 
 import json
+import time
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -158,3 +159,29 @@ class TestIntegration:
             headers=HEADERS,
         )
         assert "timed_out" in response.json()
+
+    def test_run_async_lifecycle(self, client, setup_env):
+        start = client.post(
+            "/run_async",
+            json={"command": "echo async_ok", "mode": "full-access"},
+            headers=HEADERS,
+        )
+        assert start.status_code == 200
+        job_id = start.json()["job_id"]
+
+        status = None
+        for _ in range(50):
+            status = client.post(
+                "/job_status", json={"job_id": job_id}, headers=HEADERS
+            ).json()
+            if not status["running"]:
+                break
+            time.sleep(0.1)
+        assert status["status"] == "done"
+        assert "async_ok" in status["output"]
+
+    def test_job_status_unknown_returns_404(self, client, setup_env):
+        resp = client.post(
+            "/job_status", json={"job_id": "does-not-exist"}, headers=HEADERS
+        )
+        assert resp.status_code == 404

@@ -116,10 +116,17 @@ before 2026-10-24 (and add to any renewal cron):
 Goal: ForPost usable from Claude chat, end to end.
 
 - [x] Expose the MCP endpoint: FastMCP streamable-HTTP mounted at `/mcp`
-      alongside REST, guarded by `X-API-Key` (ASGI `MCPApiKeyGuard`), DNS-
-      rebinding Host check disabled (behind nginx). Live and verified:
-      `https://forpost.poly-mind.net/mcp/` returns 401 without key, and
-      `initialize` + `tools/list` (4 tools) with the key. 101 tests green.
+      alongside REST, guarded by `X-API-Key` + rate limit (ASGI
+      `MCPApiKeyGuard`), DNS-rebinding Host check disabled (behind nginx).
+- [x] Hardening (review round): reject shell metacharacters in
+      read-only/whitelist, non-blocking exec (threadpool) + per-call timeout,
+      memory-bounded streamed output, constant-time key compare, nginx
+      `limit_req`/`limit_conn`, thread-safe rate limiter.
+- [x] Async job model for long commands: `run_async` / `job_status` /
+      `job_kill` (+ REST), file-backed logs, poll-to-follow + pagination.
+- [x] Self-describing MCP: server `instructions`, per-tool `title` +
+      `annotations` (readOnly/destructive hints), `forpost://manual` resource.
+      7 tools total. 134 tests green.
 - [ ] Connect ForPost as MCP custom connector in Claude — URL
       `https://forpost.poly-mind.net/mcp/`, request header `X-API-Key: <key>`
       (from `/opt/forpost/.env`). User-side UI step.

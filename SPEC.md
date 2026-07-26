@@ -247,6 +247,36 @@ bounds **memory** during execution (a gigabyte-output command can't spike RAM),
 and the same cap protects the response, the model's context, and the on-disk
 `commands.jsonl` from runaway output. Dropped byte count is reported inline.
 
+## Async Jobs (2026-07-26 - revises "no request IDs / no polling")
+
+The synchronous `execute_command` is bounded by its timeout and returns only
+when done. For tasks that outlive one request (`docker build`, deploys),
+ForPost adds a background job model. This intentionally revises the earlier
+"no request IDs, no polling, no separate kill endpoint" decision.
+
+- `run_async(command, mode, timeout)` -> starts the process and returns a
+  `job_id` immediately.
+- `job_status(job_id, offset)` -> `{status, running, exit_code, output,
+  offset, next_offset, total_bytes, truncated}`. Poll to follow output as it
+  grows; `next_offset` both resumes the follow and paginates.
+- `job_kill(job_id)` -> terminates a running job.
+
+Implementation: the child writes stdout+stderr straight to a per-job log file
+(`LOGS_DIR/jobs/<job_id>.log`) via its own fd, so job output never buffers in
+ForPost's memory. A supervisor thread enforces the timeout and a per-job disk
+cap (`MAX_JOB_LOG_BYTES`). Job state is in-memory (lost on restart; log files
+persist). Still no streaming push - MCP can't stream partial output mid-call,
+so the caller polls.
+
+## MCP Self-Description (2026-07-26)
+
+The MCP surface is self-documenting so any client can discover capabilities:
+- `initialize` returns server `instructions` (a built-in usage manual).
+- `tools/list` returns each tool's `title` + JSON Schema + `annotations`
+  (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`).
+- a `forpost://manual` resource (markdown) provides a fuller reference via
+  `resources/list` + `resources/read`.
+
 ## Workspace Cleanup (2026-06-15)
 
 `/home/forpost/workspace/` accumulates temporary files (code written via

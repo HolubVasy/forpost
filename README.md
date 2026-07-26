@@ -172,9 +172,26 @@ clamped to `MAX_TIMEOUT_SECONDS` (default 1800). The command runs in a worker
 thread, so a long build doesn't block `/health`. Output is streamed into a
 fixed-size ring buffer capped at `MAX_OUTPUT_CHARS` (default 100000, tail
 kept), so even a gigabyte-output command can't spike memory or fill the log.
-Following the live
-progress of a long command (job IDs / streaming) is intentionally **not** yet
-implemented - background it and `tail` the log via separate calls if needed.
+
+For tasks that outlive one request (`docker build`, deploys), use the async
+job tools instead of blocking on `execute_command`:
+
+- `run_async(command, mode, timeout)` returns a `job_id` immediately.
+- `job_status(job_id, offset)` returns status + the output produced so far;
+  poll it to follow progress, passing the previous `next_offset` (which also
+  paginates a large output). The child writes straight to a per-job log file,
+  so job output never buffers in memory.
+- `job_kill(job_id)` stops a running job.
+
+Job state is in-memory (lost on restart; the log files persist). MCP can't push
+partial output mid-call, so following progress is by polling.
+
+## Self-describing MCP
+
+Clients discover everything over MCP: `initialize` returns a usage manual
+(`instructions`), `tools/list` returns each tool's title, schema, and
+annotations (`readOnlyHint` / `destructiveHint` / ...), and a
+`forpost://manual` markdown resource gives a fuller reference.
 
 ## Out of scope
 
