@@ -157,17 +157,25 @@ def read_file_tool(
     path: str,
     mode: Mode,
     encoding: FileEncoding = FileEncoding.TEXT,
+    offset: int = 0,
+    length: int | None = None,
 ) -> dict:
-    """Read a file within the workspace. Allowed in all modes.
+    """Read a bounded slice of a file within the workspace. Allowed in all modes.
+
+    Reads at most `length` bytes (default: the server output cap) from `offset`,
+    so a huge file can't blow up memory/context. Paginate a large file by
+    passing the previous `next_offset`.
 
     Args:
         path: Path to read (relative to the workspace root).
         mode: Request mode (read_file is permitted in every mode).
         encoding: "text" (default) or "base64" for binary files.
+        offset: Byte offset to start reading from (default 0).
+        length: Max bytes to read (default/clamped to the server cap).
 
-    Returns the resolved path, content, and byte size.
+    Returns path, content, size (total), offset, next_offset, truncated.
     """
-    return _call(service.read, path, encoding, mode)
+    return _call(service.read, path, encoding, mode, offset, length)
 
 
 @mcp.tool(
@@ -302,9 +310,12 @@ Job state is in-memory (lost on server restart); output logs persist on disk.
 
 ## Files - within the workspace, subject to mode rules
 - `write_file_tool(path, content, mode, encoding="text"|"base64")`
-- `read_file_tool(path, mode, encoding)` (allowed in all modes)
+- `read_file_tool(path, mode, encoding, offset=0, length=None)` (all modes).
+  Reads are bounded (default = the output cap); paginate a big file by passing
+  the previous `next_offset`.
 - `delete_file_tool(path, mode)`
-Paths are confined to the workspace; traversal/symlink escape is rejected.
+Paths are confined to the workspace (is_relative_to check); traversal and
+symlink escape are rejected.
 
 ## Auth & limits
 Static `X-API-Key` header (set once in the connector). Rate limited; every call

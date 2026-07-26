@@ -65,7 +65,7 @@ Seven tools, exposed both as MCP tools (for the connector) and as REST endpoints
 | `job_status(job_id, offset?)` | Poll a job: status, exit_code, and new output from `offset` (follow progress + paginate). |
 | `job_kill(job_id)` | Terminate a running job. |
 | `write_file_tool(path, content, mode, encoding?)` | Write a file in the workspace (`text` or `base64`). |
-| `read_file_tool(path, mode, encoding?)` | Read a file (allowed in every mode). |
+| `read_file_tool(path, mode, encoding?, offset?, length?)` | Read a bounded slice of a file (allowed in every mode); paginate big files via `offset`/`next_offset`. |
 | `delete_file_tool(path, mode)` | Delete a file. |
 
 ## Modes

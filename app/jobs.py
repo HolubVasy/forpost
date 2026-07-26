@@ -24,6 +24,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.executor import kill_process_tree, _NEW_SESSION
+
 
 def _jobs_dir() -> Path:
     d = Path(os.environ.get("LOGS_DIR", "logs")) / "jobs"
@@ -61,7 +63,11 @@ class JobManager:
         job = Job(id=job_id, command=command, log_path=str(log_path))
         logf = open(log_path, "wb")
         proc = subprocess.Popen(
-            command, shell=True, stdout=logf, stderr=subprocess.STDOUT
+            command,
+            shell=True,
+            stdout=logf,
+            stderr=subprocess.STDOUT,
+            start_new_session=_NEW_SESSION,
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -81,14 +87,14 @@ class JobManager:
                     break  # process finished (naturally or via kill)
                 except subprocess.TimeoutExpired:
                     if deadline and time.time() > deadline:
-                        proc.kill()
+                        kill_process_tree(proc)
                         proc.wait()
                         job.status = "timeout"
                         job.exit_code = -1
                         return
                     try:
                         if os.path.getsize(job.log_path) > cap:
-                            proc.kill()
+                            kill_process_tree(proc)
                             proc.wait()
                             job.truncated = True
                             job.status = "killed"
@@ -144,7 +150,7 @@ class JobManager:
         if proc is not None and proc.poll() is None:
             job.status = "killed"
             job.exit_code = -1
-            proc.kill()
+            kill_process_tree(proc)
         return {"job_id": job_id, "status": job.status}
 
 

@@ -86,8 +86,14 @@ def write(path: str, content: str, encoding: FileEncoding, mode: Mode) -> dict:
     return result
 
 
-def read(path: str, encoding: FileEncoding, mode: Mode) -> dict:
-    result = read_file(path, encoding)
+def read(
+    path: str,
+    encoding: FileEncoding,
+    mode: Mode,
+    offset: int = 0,
+    length: int | None = None,
+) -> dict:
+    result = read_file(path, encoding, offset, length)
     log_file_operation("read_file", result["path"], mode.value, result["size"])
     return result
 

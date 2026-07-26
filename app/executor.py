@@ -9,11 +9,27 @@ full pipe; the overall timeout bounds wall-clock time.
 """
 
 import os
+import signal
 import subprocess
 import threading
 from dataclasses import dataclass
 
 READ_CHUNK = 65536
+
+# On POSIX, start each command in its own session/process-group so we can kill
+# the whole tree (shell + pipeline children), not just /bin/sh.
+_NEW_SESSION = os.name == "posix"
+
+
+def kill_process_tree(proc: "subprocess.Popen") -> None:
+    """Kill a command's whole process group (POSIX) or the process (Windows)."""
+    try:
+        if _NEW_SESSION:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, OSError):
+        pass
 
 
 @dataclass
@@ -77,6 +93,7 @@ def execute(command: str, timeout: int | None = None) -> CommandResult:
         shell=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        start_new_session=_NEW_SESSION,
     )
     out_reader = _CappedReader(proc.stdout, cap)
     err_reader = _CappedReader(proc.stderr, cap)
@@ -87,7 +104,7 @@ def execute(command: str, timeout: int | None = None) -> CommandResult:
         proc.wait(timeout=timeout)
         exit_code = proc.returncode
     except subprocess.TimeoutExpired:
-        proc.kill()
+        kill_process_tree(proc)
         proc.wait()
         exit_code = -1
 

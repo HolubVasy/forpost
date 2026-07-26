@@ -95,6 +95,17 @@ class TestWriteFile:
         assert resp.status_code == 403
         assert "escapes" in resp.json()["detail"]
 
+    def test_sibling_prefix_escape_blocked(self, client, setup_env):
+        # A sibling dir sharing the workspace name prefix must NOT be writable
+        # (regression for the old str.startswith check).
+        resp = client.post(
+            "/write_file",
+            json={"path": "../workspace-evil/hack", "content": "x", "mode": "full-access"},
+            headers=HEADERS,
+        )
+        assert resp.status_code == 403
+        assert "escapes" in resp.json()["detail"]
+
 
 class TestReadFile:
     def test_read_text_file(self, client, setup_env):
@@ -138,6 +149,24 @@ class TestReadFile:
                 headers=HEADERS,
             )
             assert resp.status_code == 200, f"Failed for mode={mode}"
+
+    def test_read_paginates_and_caps(self, client, setup_env, monkeypatch):
+        monkeypatch.setenv("MAX_OUTPUT_CHARS", "10")
+        (setup_env / "workspace" / "big.txt").write_text("ABCDEFGHIJKLMNOP")  # 16
+        r1 = client.post(
+            "/read_file", json={"path": "big.txt", "mode": "read-only"}, headers=HEADERS
+        ).json()
+        assert r1["content"] == "ABCDEFGHIJ"  # first 10 bytes (the cap)
+        assert r1["size"] == 16
+        assert r1["truncated"] is True
+        assert r1["next_offset"] == 10
+        r2 = client.post(
+            "/read_file",
+            json={"path": "big.txt", "mode": "read-only", "offset": 10},
+            headers=HEADERS,
+        ).json()
+        assert r2["content"] == "KLMNOP"
+        assert r2["truncated"] is False
 
     def test_read_path_traversal_blocked(self, client, setup_env):
         resp = client.post(

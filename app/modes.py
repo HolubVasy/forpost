@@ -22,7 +22,8 @@ ALLOWED_READ_PREFIXES = (
     "docker ps",
     "echo ",
     "env",
-    "find ",
+    # NOTE: `find` is intentionally NOT here - `find . -delete` / `-exec rm`
+    # would make read-only destructive. Use full-access for find-with-actions.
     "git branch",
     "git diff",
     "git log",
@@ -48,9 +49,9 @@ ALLOWED_READ_PREFIXES = (
 # Shell metacharacters that enable command chaining, substitution, or
 # redirection. Rejected in read-only/whitelist so an allowed prefix can't be
 # used to smuggle a second command (e.g. "ls; rm -rf" or "git && curl ...").
-# This is "protection from self", not a sandbox: it does NOT stop dangerous
-# flags of an otherwise-allowed command (e.g. `find -delete`). full-access is
-# the deliberate escape hatch when you really need chaining/pipes.
+# This is "protection from self", not a sandbox: it does NOT inspect an allowed
+# command's own flags. full-access is the deliberate escape hatch for
+# chaining/pipes.
 _SHELL_METACHARS = frozenset(";|&`$()<>\n\r")
 
 

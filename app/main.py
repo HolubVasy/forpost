@@ -1,5 +1,6 @@
 """ForPost - main FastAPI application."""
 
+import json
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ mcp_app = mcp.streamable_http_app()
 
 
 async def _send_json_error(send, status: int, message: str) -> None:
-    body = f'{{"error":{message!r}}}'.encode()
+    body = json.dumps({"error": message}).encode()
     await send({
         "type": "http.response.start",
         "status": status,
@@ -140,12 +141,17 @@ class ReadFileRequest(BaseModel):
     path: str
     encoding: FileEncoding = FileEncoding.TEXT
     mode: Mode
+    offset: int = 0
+    length: int | None = None
 
 
 class ReadFileResponse(BaseModel):
     path: str
     content: str
-    size: int
+    size: int  # total file size in bytes
+    offset: int = 0
+    next_offset: int = 0
+    truncated: bool = False
 
 
 class DeleteFileRequest(BaseModel):
@@ -175,7 +181,12 @@ async def read_file_endpoint(
 ):
     rate_limiter.check()
     return await run_in_threadpool(
-        service.read, request.path, request.encoding, request.mode
+        service.read,
+        request.path,
+        request.encoding,
+        request.mode,
+        request.offset,
+        request.length,
     )
 
 

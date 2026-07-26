@@ -68,6 +68,8 @@ class TestReadOnlyMode:
         "> /tmp/file",
         "mkdir /tmp/test",
         "pip install something",
+        "find . -delete",              # find is no longer read-only
+        "find /home -exec rm {} +",
     ])
     def test_write_commands_rejected(self, cmd):
         allowed, reason = validate_command(cmd, Mode.READ_ONLY)
