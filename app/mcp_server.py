@@ -65,10 +65,12 @@ full-access (whitelist must not be able to plant files).
 
 HEALTH: diagnostics() returns a one-call snapshot (alive?, memory, jobs
 running/stuck, versions, recent failures) - read it instead of digging through
-logs. reset(scope="jobs"|"logs"|"all") clears own state: stuck jobs, logs, or all.
+logs. reset(scope="jobs"|"logs"|"workspace"|"all") clears own state: stuck jobs,
+logs, the scratch workspace, or all of them.
 
 LIMITS: output is capped (tail kept) to bound memory and context; every call is
-logged. Auth is a static X-API-Key header, configured once in the connector.
+logged. Auth is a static X-API-Key header (or, when enabled, a Google-OIDC
+bearer), configured once in the connector.
 
 See the forpost://manual resource for a fuller reference.
 """
@@ -372,12 +374,14 @@ symlink escape are rejected.
 - `diagnostics()` - one-call snapshot: `ok`, uptime, checks (docker/workspace/
   logs), memory (process + system), jobs (running/stuck/zombies), recent
   failures, tool versions. Read this instead of the logs. Also `GET /diagnostics`.
-- `reset(scope="jobs"|"logs"|"all")` - clear own state: jobs (kill+wipe),
-  logs (truncate command+app logs), or all.
+- `reset(scope="jobs"|"logs"|"workspace"|"all")` - clear own state: jobs
+  (kill+wipe), logs (truncate command+app logs), workspace (delete scratch),
+  or all.
 
 ## Auth & limits
-Static `X-API-Key` header (set once in the connector). Rate limited; every call
-is logged. Prefer read-only/whitelist when you want a brake.
+Static `X-API-Key` header (set once in the connector), or an optional Google-OIDC
+bearer on `/mcp` (verified audience + allow-listed email) when enabled. Rate
+limited; every call is logged. Prefer read-only/whitelist when you want a brake.
 """
 
 

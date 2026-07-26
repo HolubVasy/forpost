@@ -90,12 +90,50 @@ set.
 
 ## Phase 5: Integration Tests (manual, via Claude chat)
 
-- Read-only: `docker ps`, `docker logs <container>` return real output
-- Whitelist: `git pull` on a test repo succeeds; a command NOT in
-  `whitelist.config` is rejected
+- Connector: added in Claude and reachable; **signs in via Google (OIDC)** with
+  an allow-listed email — verified live. ✅
+- Read-only: `docker ps`, `docker logs <container>` return real output ✅
+- Whitelist: a whitelisted command succeeds (verified with `gh pr list` on a
+  private work repo); a command NOT in `whitelist.config` is rejected ✅
 - Full-access: an arbitrary one-off command executes and returns output
+  (verified with `gh repo create` + delete in the personal account) ✅
+- `diagnostics` from chat returns a live snapshot (real memory/uptime/versions) ✅
 - End to end: BriefDay v0 deployed via ForPost (gh repo interactions,
-  file writes via heredoc, docker compose up, logs read back)
+  file writes, docker compose up, logs read back) — future first real project.
+
+## Phase 5: Hardening & Extension Tests (automated)
+
+Added alongside the original suite as the surface grew (whole suite ~178
+passing, 1 skipped):
+
+### test_mcp_http.py — the mounted `/mcp` HTTP guard
+- `POST /mcp/` without a key -> 401; wrong key -> 401; 401 body is valid JSON
+- `initialize` with the correct `X-API-Key` -> 200, response mentions `ForPost`
+- `/mcp` is rate-limited (429 after the configured per-minute limit)
+
+### test_oauth.py — optional Google-OIDC bearer path
+- Allow-list: exact-email match and `@domain` rule (allowed vs rejected)
+- `oauth_enabled()` toggles on `OAUTH_ENABLED`; `verify_bearer` returns `None`
+  (no network call) when disabled
+- Guard `_authenticated`: accepts a valid `X-API-Key`; accepts a valid bearer
+  only when OAuth is on; rejects a bad bearer; rejects when neither is present
+
+### test_service.py — diagnostics & reset
+- `diagnostics()` returns the expected shape (`ok`, checks, memory, jobs,
+  recent, versions) without a real docker daemon
+- `reset(scope=...)` clears the right things per scope (`jobs` / `logs` /
+  `workspace` / `all`); invalid scope -> error
+
+### test_jobs.py — async job lifecycle
+- `run_async` starts a job and returns an id; `job_status` follows growing
+  output and paginates via `next_offset`; `job_kill` stops a running job;
+  finished jobs are reaped after retention; per-job log cap is enforced
+
+### Command safety / limits (in test_modes.py / test_executor.py)
+- Shell metacharacters (`; | & \` $ ( ) < >`, newlines) rejected in
+  read-only/whitelist; token-boundary matching (`ps` != `psql`, `ls` != `lsof`)
+- Output over `MAX_OUTPUT_CHARS` is truncated (tail kept); a command timeout
+  kills the process and returns partial output with `timed_out=true`
 
 ## Regression Checklist (run before any future change is considered done)
 

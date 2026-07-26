@@ -6,20 +6,29 @@ This document also records the **decision history** (dated sections below), wher
 some early choices were deliberately superseded. For the current, authoritative
 description use `README.md` and `CLAUDE.md`. In short, as built and deployed:
 
-- **Tools (7):** `execute_command` (sync) + `run_async`/`job_status`/`job_kill`
-  (async jobs for long commands) + `write_file`/`read_file`/`delete_file`.
+- **Tools (9):** `execute_command` (sync) + `run_async`/`job_status`/`job_kill`
+  (async jobs for long commands) + `write_file`/`read_file`/`delete_file` +
+  `diagnostics` (one-call health snapshot) + `reset` (self-cleanup by scope).
+  All exposed as both MCP tools and REST endpoints over one shared service layer.
   (Supersedes the early "one tool, no write_file, no polling" notes.)
 - **Modes:** read-only / whitelist / full-access; read-only & whitelist also
-  reject shell metacharacters.
+  reject shell metacharacters. `whitelist.config` allows git pull/fetch/status/
+  log, docker restart/logs, docker compose up/down/pull, and read-only `gh`
+  (pr list/view/diff/status/checks, repo view, issue list/view).
 - **Timeout:** per-call `timeout` (default 300s, max `MAX_TIMEOUT_SECONDS`),
   not a hardcoded 5 min.
 - **Output:** streamed, memory-bounded, capped (`MAX_OUTPUT_CHARS`).
+- **Logs:** two streams (`commands.jsonl` audit + `app.log` operational),
+  size-budgeted (`MAX_LOG_BYTES`: trim-oldest for the audit log, rotate for
+  app.log) with secrets redacted in the audit trail.
 - **Transport:** FastAPI REST + FastMCP streamable-HTTP at `/mcp`, behind nginx
   (HTTPS, `limit_req`, `proxy_read_timeout` 1800s). Auth: static `X-API-Key`
-  (constant-time), plus app + nginx rate limits.
+  (constant-time) **or** an optional Google-OIDC bearer on `/mcp` (verified
+  audience + allow-listed email), plus app + nginx rate limits.
 - **MCP self-description:** server `instructions`, per-tool annotations, and a
   `forpost://manual` resource.
-- **Deployed:** `https://forpost.poly-mind.net` (MCP: `.../mcp/`).
+- **Deployed:** `https://forpost.poly-mind.net` (MCP: `.../mcp/`). Phases 1–5
+  done; the Claude connector is registered and working via Google OIDC.
 
 ## Project Goal
 
@@ -87,6 +96,11 @@ One tool: `execute_command`
 - Single static API key, checked before anything else. Missing/invalid -> 401.
   Compared in constant time (`hmac.compare_digest`) to avoid a timing side-channel.
 - Rotation: on suspected leak, or as occasional hygiene - no fixed schedule.
+- **Optional Google-OIDC on `/mcp`** (added 2026-07-26, see decision section
+  below): when `OAUTH_ENABLED`, the `/mcp` guard *also* accepts a Google bearer
+  token — a request is authorised if it satisfies *either* the key *or* a valid
+  bearer. This exists because the Claude connector dialog offered no header-auth
+  field; the static key remains the whole boundary for the REST surface.
 
 ## Logging
 
@@ -98,8 +112,12 @@ Two separate log streams:
   (startup, errors, auth failures, crashes). Operational/debugging data,
   kept separate from the command audit trail.
 
-No database. JSONL files. Rotation via `logrotate` if/when it becomes
-relevant - not configured now.
+No database. JSONL/text files. **Rotation is configured in-app** (revised
+2026-07-26, see decision section): both files share a size budget
+(`MAX_LOG_BYTES`); when `commands.jsonl` exceeds it the oldest
+`LOG_TRIM_FRACTION` of lines are dropped, and `app.log` rotates (one `.1`
+backup). Secrets (`ghp_`/`github_pat_`/`sk-`/`AKIA…`/`Bearer`/`X-API-Key`) are
+**redacted** in the command audit log.
 
 ## Repo & Deploy Workflow (typical usage, not separate tools)
 
@@ -137,9 +155,11 @@ scoped user account.
 ## Out of Scope (deliberately)
 
 - No Azure/AWS-style orchestration or dashboard
-- No multi-user auth, OAuth, token rotation system
+- No multi-user accounts or roles (the optional Google-OIDC layer added
+  2026-07-26 is just an email allow-list gating a single-user tool, not a
+  multi-tenant auth system), no token-rotation system
 - No automated rollback/snapshot system
-- No IP allowlisting (API key is sufficient)
+- No IP allowlisting (API key / OIDC is sufficient)
 - No structured DB for logs (Postgres, Mongo, vector DB all considered
   and rejected)
 
@@ -203,8 +223,10 @@ No retry logic - if a request fails, it returns an error as-is (per
 runaway request loops (a bug in the caller sending requests too fast,
 not malicious traffic).
 
-- Configurable via `.env`, e.g. `RATE_LIMIT_PER_MINUTE=60`
-- Default: 60 requests per minute
+- Configurable via `.env`, e.g. `RATE_LIMIT_PER_MINUTE=120`
+- Default: 120 requests per minute (raised from 60 on 2026-07-26); it covers
+  *actions* only — queries (`read_file`, `job_status`, `job_kill`) are exempt so
+  polling/killing a job is never throttled
 - Exceeding the limit returns 429, request not executed, logged to app.log
 - This is "protection from self" (same framing as the whitelist) - a
   safety net against accidental loops, not a security feature against
@@ -304,6 +326,70 @@ The MCP surface is self-documenting so any client can discover capabilities:
   (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`).
 - a `forpost://manual` resource (markdown) provides a fuller reference via
   `resources/list` + `resources/read`.
+
+## Diagnostics & Reset (2026-07-26)
+
+Two operational tools were added (both MCP + REST), so state can be inspected and
+cleaned without shell spelunking:
+
+- `diagnostics()` / `GET /diagnostics` — one fixed, safe set of probes (no mode,
+  no arbitrary command): `ok` (alive & healthy), `uptime_seconds`, `checks`
+  (docker reachable, workspace + logs writable), `memory` (process RSS + system
+  available/total), `jobs` (running / by-status / zombie count), `recent`
+  (failed-command summary + last app WARNING/ERROR), tool `versions`, and
+  `commands_log_bytes`. Read this instead of opening the logs.
+- `reset(scope)` / `POST /reset` — clears **ForPost's own** state only, never the
+  host: `jobs` (kill running + wipe job state/logs), `logs` (truncate
+  commands.jsonl + app.log and remove rotated backups), `workspace` (delete
+  everything under the managed workspace), `all` (jobs + logs + workspace).
+
+## Log Rotation & Redaction (2026-07-26 — revises "logrotate deferred")
+
+The earlier "rotation via logrotate if/when relevant" is replaced by in-app
+handling so a long-lived instance can't fill the disk or leak secrets:
+
+- **Budget + trim:** each log file has a byte budget `MAX_LOG_BYTES` (default
+  10 MB). When `commands.jsonl` exceeds it, the oldest `LOG_TRIM_FRACTION`
+  (default 0.2) of lines are dropped; `app.log` uses a `RotatingFileHandler`
+  keeping one `.1` backup.
+- **Redaction:** before an audit line is written, secret-shaped tokens
+  (`sk-…`, `ghp_…`, `github_pat_…`, `AKIA…`, `Bearer …`, `X-API-Key: …`) are
+  masked, so a command that echoes a token doesn't persist it in cleartext.
+- `reset(scope="logs"|"all")` truncates both streams on demand.
+
+## Optional Google-OIDC on /mcp (2026-07-26)
+
+ForPost's own auth is the static `X-API-Key`. But the Claude custom-connector
+dialog (on the account used) exposed no request-header field — only an OAuth
+flow. So `/mcp` gained an **optional** second credential, enabled with
+`OAUTH_ENABLED`:
+
+- ForPost acts as an OAuth **resource server** only — Google is the
+  authorization server; ForPost never sees a password. A presented Google
+  **bearer** token is verified against Google's `tokeninfo` endpoint.
+- Accepted only if: `aud == OAUTH_CLIENT_ID` (blocks a token minted for another
+  app — confused-deputy guard), `email_verified` is true, and the email is in
+  `OAUTH_ALLOWED_EMAILS` (an exact address, or a `@domain` rule). Positive
+  results are cached up to ~5 min (bounded by the token's own `exp`).
+- Discovery follows RFC 9728: a `401` carries
+  `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"`,
+  and that endpoint advertises `https://accounts.google.com` as the auth server.
+- A request to `/mcp` is authorised if it satisfies **either** the key **or** a
+  valid bearer; the guard then applies the rate limit. Turned off, ForPost stays
+  key-only. The Google OAuth client is a *Web application* client whose
+  authorized redirect URI is `https://claude.ai/api/mcp/auth_callback`.
+
+This is not multi-user auth — it's a single-user allow-list so that arbitrary
+Google users can't reach a publicly-hosted `/mcp`.
+
+## gh read-only in whitelist mode (2026-07-26)
+
+`whitelist.config` gained read-only GitHub CLI prefixes — `gh pr
+list/view/diff/status/checks`, `gh repo view`, `gh issue list/view` — so PRs and
+repos can be inspected in whitelist mode. Write actions (`gh repo create`, `gh pr
+merge`, …) remain full-access only. In practice two `gh` tokens are wired: a
+personal one (repo creation, full) and a work one (private-PR read, `repo`
+scope).
 
 ## Workspace Cleanup (2026-06-15)
 

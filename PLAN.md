@@ -111,36 +111,46 @@ needs port 80 free, but `LibreChat-NGINX` holds it — so the scheduled
 before 2026-10-24 (and add to any renewal cron):
 `docker stop LibreChat-NGINX && certbot renew && docker start LibreChat-NGINX`.
 
-## Phase 5: Integration (in progress)
+## Phase 5: Integration ✅ (done - 2026-07-26)
 
 Goal: ForPost usable from Claude chat, end to end.
 
 - [x] Expose the MCP endpoint: FastMCP streamable-HTTP mounted at `/mcp`
       alongside REST, guarded by `X-API-Key` + rate limit (ASGI
       `MCPApiKeyGuard`), DNS-rebinding Host check disabled (behind nginx).
-- [x] Hardening (review round): reject shell metacharacters in
+- [x] Hardening (review rounds): reject shell metacharacters in
       read-only/whitelist, non-blocking exec (threadpool) + per-call timeout,
       memory-bounded streamed output, constant-time key compare, nginx
-      `limit_req`/`limit_conn`, thread-safe rate limiter.
+      `limit_req`/`limit_conn`, thread-safe rate limiter, token-boundary prefix
+      matching, workspace-escape/symlink guards.
 - [x] Async job model for long commands: `run_async` / `job_status` /
       `job_kill` (+ REST), file-backed logs, poll-to-follow + pagination.
 - [x] Self-describing MCP: server `instructions`, per-tool `title` +
       `annotations` (readOnly/destructive hints), `forpost://manual` resource.
-      7 tools total. 134 tests green.
-- [ ] Connect ForPost as MCP custom connector in Claude — URL
-      `https://forpost.poly-mind.net/mcp/`, request header `X-API-Key: <key>`
-      (from `/opt/forpost/.env`). User-side UI step.
-- [ ] Test read-only mode (docker ps, logs) from Claude chat / mobile
-- [ ] Test whitelist mode (git pull, docker restart on a test container)
-- [ ] Test full-access mode (one-off command)
-- [ ] First real task: deploy BriefDay v0 through ForPost
+- [x] Operational tooling: `diagnostics` (health snapshot) + `reset` (scoped
+      self-cleanup) on both surfaces; in-app log rotation (budget + trim) and
+      secret redaction. **9 tools total.** ~178 tests green (1 skipped).
+- [x] `uvicorn --proxy-headers --forwarded-allow-ips=*` so proxied redirects
+      use https; `gh` read-only prefixes added to `whitelist.config`.
+- [x] Optional Google-OIDC on `/mcp` (`OAUTH_ENABLED`): resource-server verify
+      of a Google bearer (audience + verified-email allow-list), RFC 9728
+      discovery. Needed because the connector dialog offered no header field.
+- [x] Connect ForPost as MCP custom connector in Claude — URL
+      `https://forpost.poly-mind.net/mcp/`; **live via Google sign-in (OIDC)**.
+      Works on desktop + mobile (account-level connector).
+- [x] Tested read-only mode from chat (`docker ps`).
+- [x] Tested whitelist mode from chat (`gh pr list` on a private work repo).
+- [x] Tested full-access mode from chat (`gh repo create` + delete in the
+      personal account).
+- [ ] First real task: deploy BriefDay v0 through ForPost (future).
 
-**Exit criteria:** all three modes work end to end from Claude chat;
-BriefDay v0 successfully deployed via ForPost.
+**Exit criteria:** all three modes work end to end from Claude chat. ✅ met
+(BriefDay v0 deploy is tracked separately as the first real project.)
 
 ## Out of Scope / Deferred
 
 - Multi-VPS support
 - Web dashboard
-- Log rotation (logrotate) - add only if logs become unwieldy
+- ~~Log rotation~~ — **done** (in-app budget + trim + app.log rotation, plus
+  secret redaction; 2026-07-26), not via system `logrotate`.
 - Any of the items listed in SPEC.md "Out of Scope"

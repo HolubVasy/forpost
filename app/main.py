@@ -303,7 +303,7 @@ async def job_kill_endpoint(
 
 
 class ResetRequest(BaseModel):
-    scope: str = "jobs"  # "jobs" | "logs" | "all"
+    scope: str = "jobs"  # "jobs" | "logs" | "workspace" | "all"
 
 
 @app.post("/reset")
@@ -311,5 +311,5 @@ async def reset_endpoint(
     request: ResetRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    """Reset ForPost's own state: scope = jobs | logs | all."""
+    """Reset ForPost's own state: scope = jobs | logs | workspace | all."""
     return await run_in_threadpool(service.reset, request.scope)
