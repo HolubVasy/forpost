@@ -1,5 +1,6 @@
 # Environment
 .env
+.runner.env
 
 # Python
 __pycache__/

@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run one autonomous Claude Code task headlessly.  Usage:  task "<goal>"
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (Claude subscription; run `claude setup-token`
+# once to mint it). No --bare: it bypasses the OAuth token.
+# Git: the personal GITHUB_TOKEN is fed to git via a credential helper that
+# reads it from the environment (never written to disk).
+set -euo pipefail
+
+if [ -z "${1:-}" ]; then
+  echo 'usage: task "<goal>"' >&2
+  exit 2
+fi
+
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  git config --global credential.helper \
+    '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
+fi
+
+exec claude -p "$*" \
+  --permission-mode bypassPermissions \
+  --output-format stream-json --verbose \
+  --max-turns "${CLAUDE_MAX_TURNS:-40}"
