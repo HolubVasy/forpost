@@ -228,15 +228,24 @@ standalone with `python -m app.mcp_server` (stdio; set
 
 ## Deployment (VPS)
 
-1. Clone the repo to the VPS (e.g. `/opt/forpost`).
-2. Copy `.env.example` → `.env`, set `API_KEY` (and `GITHUB_TOKEN` if needed).
-3. Build & start, passing the host's docker group GID so the mounted socket is
-   usable by the non-root `forpost` user:
+**GitHub is the source of truth — the VPS is a `git clone`, and every deploy is
+`git pull` + rebuild. Never edit or copy files onto the VPS out of band.**
+
+1. `git clone` the repo to the VPS (e.g. `/opt/forpost`).
+2. Copy `.env.example` → `.env`, set `API_KEY` (and the git tokens if needed).
+   `.env` is git-ignored and stays only on the VPS.
+3. Build & start with the production compose (joins the shared proxy network),
+   passing the host's docker group GID so the mounted socket is usable:
    ```bash
-   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
+   DOCKER_GID=$(getent group docker | cut -d: -f3) \
+     docker compose -f docker-compose.prod.yml up -d --build
    ```
 4. Put the service behind HTTPS on a subdomain (reverse proxy + Let's Encrypt).
 5. Add the connector in Claude (see [Quick Start](#quick-start--connect-it-to-claude-and-your-phone)).
+
+**Redeploy** after any change is always: on the VPS `git pull`, then re-run the
+step-3 command. (`docker-compose.yml` is the base/local file; `docker-compose.prod.yml`
+is the VPS one, both tracked in git.)
 
 The container runs `uvicorn app.main:app` on port 8000 as the non-root
 `forpost` user (in the `docker` group), with `/home/forpost` on the

@@ -1,0 +1,37 @@
+# ForPost - VPS production deployment (kept in git, the source of truth).
+#
+# Differs from the base docker-compose.yml: instead of publishing a host port it
+# joins the existing `librechat_default` network, so the shared LibreChat-NGINX
+# reverse proxy reaches it as http://forpost:8000 and terminates TLS.
+#
+# Deploy on the VPS (from a git checkout of this repo):
+#   git pull
+#   DOCKER_GID=$(getent group docker | cut -d: -f3) \
+#     docker compose -f docker-compose.prod.yml up -d --build
+services:
+  forpost:
+    build:
+      context: .
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
+    image: forpost:latest
+    container_name: forpost
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Host docker socket - lets ForPost manage other containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist the managed workspace + logs across restarts/rebuilds.
+      - forpost_home:/home/forpost
+      # Whitelist is editable without a rebuild.
+      - ./whitelist.config:/app/whitelist.config:ro
+    networks:
+      - librechat_default
+
+networks:
+  librechat_default:
+    external: true
+
+volumes:
+  forpost_home:
