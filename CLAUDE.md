@@ -3,7 +3,8 @@
 ## What this is
 
 A minimal MCP server giving Claude a remote command-line tunnel into a VPS.
-One tool (`execute_command`), three modes, API key auth, full logging.
+Primary tool `execute_command` plus explicit file ops (`write_file` /
+`read_file` / `delete_file`), three modes, API key auth, full logging.
 ForPost executes and returns - no smart logic, no retries, no rollback.
 All reasoning about what to run and how to interpret results happens on
 the Claude/user side.
@@ -31,6 +32,14 @@ the Claude/user side.
 Ubuntu-based Docker container, non-root `forpost` user in `docker` group,
 bash/git/gh/docker-compose, FastAPI + MCP wrapper, Caddy/nginx for HTTPS.
 
+## Deployment status
+
+Phases 1-4 done. Live at `https://forpost.poly-mind.net` (German Zomro VPS
+`188.137.227.248`, code in `/opt/forpost`), running the FastAPI REST service
+behind the shared `LibreChat-NGINX` proxy on the `librechat_default` network.
+Phase 5 (expose the MCP streamable-http endpoint `/mcp` and register it as a
+Claude custom connector) is in progress. Cert renew is manual - see `PLAN.md`.
+
 ## Local Development Environment
 
 During development (Phase 1-2), ForPost runs locally, not on the VPS.
@@ -51,7 +60,10 @@ proceeding. Use pytest.
 
 ## What NOT to do
 
-- Don't add `write_file` as a separate tool - heredoc via execute_command covers it
+- File ops (`write_file`/`read_file`/`delete_file`) DO exist - added per the
+  SPEC "File Operations" revision (2026-06-15). They are simple byte transport
+  scoped to `/home/forpost/`, not smart logic. Don't add tools beyond these +
+  `execute_command` (the original "heredoc covers it" rule was superseded).
 - Don't add auto-recovery, retries, or rollback logic
 - Don't add a database for logs
 - Don't add multi-step confirmation flows for Full Access

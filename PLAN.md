@@ -79,18 +79,37 @@ Goal: ForPost runs in Docker, ready to deploy.
 **Exit criteria:** container builds, starts, responds to a read-only
 request from the host machine.
 
-## Phase 4: Deployment
+## Phase 4: Deployment ✅ (done - 2026-07-26)
 
 Goal: ForPost running on VPS, reachable via HTTPS.
 
-- [ ] Create dedicated GitHub bot account + token, add to `.env` on VPS
-- [ ] Generate `API_KEY` via `openssl rand -hex 32`, add to `.env` on VPS
-- [ ] Clone repo to VPS, `docker compose up -d --build`
-- [ ] Configure domain + Let's Encrypt HTTPS (Caddy or nginx reverse proxy)
-- [ ] Smoke test from outside: read-only `docker ps` over HTTPS
+Deployed to the German Zomro VPS (`188.137.227.248`) at
+`https://forpost.poly-mind.net`, alongside the existing LibreChat/jobs stack.
+
+- [ ] Dedicated GitHub bot account + token — deferred; `GITHUB_TOKEN` left
+      empty in `.env` for now (only needed when `gh` is used inside the tunnel)
+- [x] Generate `API_KEY` via `openssl rand -hex 32`, stored in
+      `/opt/forpost/.env` (chmod 600) on the VPS
+- [x] Deploy to VPS: code in `/opt/forpost`, VPS-specific `docker-compose.yml`
+      (joins the external `librechat_default` network so the existing
+      `LibreChat-NGINX` proxy can reach it as `http://forpost:8000`;
+      `DOCKER_GID=999` matches the host docker group), `docker compose up -d`
+- [x] Domain + HTTPS: A record `forpost.poly-mind.net` -> VPS (Namecheap);
+      Let's Encrypt cert via **certbot standalone** (brief nginx stop, same
+      method as chat/jobs); added `server` blocks to the shared
+      `/opt/LibreChat/client/nginx.conf` (backup taken, `nginx -t`, reload)
+- [x] Smoke test from outside: `https://forpost.poly-mind.net/health` 200,
+      read-only `docker ps` with API key returns the container list, no key ->
+      401. Existing chat/jobs untouched.
 
 **Exit criteria:** `https://forpost.<domain>` responds correctly with
-valid API key, rejects without.
+valid API key, rejects without. ✅ met.
+
+**⚠️ Cert auto-renew caveat:** the cert is standalone-authenticated, which
+needs port 80 free, but `LibreChat-NGINX` holds it — so the scheduled
+`certbot renew` will fail (same as the existing `chat` cert). Renew manually
+before 2026-10-24 (and add to any renewal cron):
+`docker stop LibreChat-NGINX && certbot renew && docker start LibreChat-NGINX`.
 
 ## Phase 5: Integration
 
