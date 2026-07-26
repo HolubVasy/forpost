@@ -64,6 +64,7 @@ One tool: `execute_command`
 ## Auth
 
 - Single static API key, checked before anything else. Missing/invalid -> 401.
+  Compared in constant time (`hmac.compare_digest`) to avoid a timing side-channel.
 - Rotation: on suspected leak, or as occasional hygiene - no fixed schedule.
 
 ## Logging
@@ -188,6 +189,11 @@ not malicious traffic).
   safety net against accidental loops, not a security feature against
   external abuse (API key is the security boundary)
 
+Against actual external floods / key brute-force there is a second layer at
+the reverse proxy (2026-07-26): nginx `limit_req` (20 r/s, burst 40) +
+`limit_conn` (30) on the forpost vhost, returning 429. This covers all paths
+(incl. pre-auth), which the app-level limiter alone does not.
+
 ## Response Format (2026-06-15, clarification)
 
 Response is a simple JSON object with plaintext fields - no nested
@@ -235,9 +241,11 @@ full-access is the deliberate escape hatch for chaining/pipes.
 
 ## Output Truncation (2026-07-26)
 
-Command stdout/stderr returned and logged are capped at `MAX_OUTPUT_CHARS`
-(default 100000), keeping the tail, to protect the response, the model's
-context, and the on-disk log from runaway output.
+Command stdout/stderr are streamed on background threads into a fixed-size ring
+buffer that keeps only the last `MAX_OUTPUT_CHARS` bytes (default 100000). This
+bounds **memory** during execution (a gigabyte-output command can't spike RAM),
+and the same cap protects the response, the model's context, and the on-disk
+`commands.jsonl` from runaway output. Dropped byte count is reported inline.
 
 ## Workspace Cleanup (2026-06-15)
 

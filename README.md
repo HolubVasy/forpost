@@ -115,6 +115,10 @@ Notes:
   -t`, then `docker exec LibreChat-NGINX nginx -s reload` (graceful, no
   downtime). Never blind-reload without `nginx -t` - this proxy fronts other
   live services.
+- The forpost vhost has `limit_req` (20 r/s, burst 40) + `limit_conn` (30) per
+  client IP (zone defined at the top of the config), returning 429. This is
+  the flood / key-brute-force layer and covers all paths including pre-auth,
+  which the app-level rate limiter does not.
 
 ## Logs
 
@@ -128,7 +132,8 @@ Two layers, and they are independent:
 **1. ForPost's own auth (the app).** A single static API key, sent as the
 `X-API-Key` request header, checked on **every** request before anything else.
 Missing or wrong key -> `401`, nothing executes, nothing is logged to
-`commands.jsonl`. The same key covers all three modes. The only unauthenticated
+`commands.jsonl`. The key is compared in constant time (`hmac.compare_digest`).
+The same key covers all three modes. The only unauthenticated
 route is `GET /health` (so proxies / healthchecks don't need the key). The key
 lives only in `/opt/forpost/.env` on the VPS (`chmod 600`) - generate it with
 `openssl rand -hex 32`. There is deliberately no OAuth, no multi-user, no IP
@@ -164,8 +169,10 @@ sandbox - it does not neuter an allowed command's own dangerous flags
 
 `execute_command` takes an optional per-call `timeout` (seconds, default 300),
 clamped to `MAX_TIMEOUT_SECONDS` (default 1800). The command runs in a worker
-thread, so a long build doesn't block `/health`. Returned/logged output is
-capped at `MAX_OUTPUT_CHARS` (default 100000, tail kept). Following the live
+thread, so a long build doesn't block `/health`. Output is streamed into a
+fixed-size ring buffer capped at `MAX_OUTPUT_CHARS` (default 100000, tail
+kept), so even a gigabyte-output command can't spike memory or fill the log.
+Following the live
 progress of a long command (job IDs / streaming) is intentionally **not** yet
 implemented - background it and `tail` the log via separate calls if needed.
 
