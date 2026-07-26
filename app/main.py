@@ -17,7 +17,7 @@ def _clamp_timeout(requested: int) -> int:
     hard_max = int(os.environ.get("MAX_TIMEOUT_SECONDS", "1800"))
     return max(1, min(int(requested), hard_max))
 
-from app.auth import get_api_key, verify_api_key
+from app.auth import get_api_key, keys_match, verify_api_key
 from app.executor import execute
 from app.file_ops import FileEncoding, delete_file, read_file, write_file
 from app.logging_config import get_app_logger, log_command, log_file_operation
@@ -50,7 +50,7 @@ class MCPApiKeyGuard:
                 expected = get_api_key()
             except RuntimeError:
                 expected = None
-            if not expected or provided != expected:
+            if not expected or not keys_match(provided, expected):
                 get_app_logger().warning("MCP request rejected: missing/invalid API key")
                 await send({
                     "type": "http.response.start",

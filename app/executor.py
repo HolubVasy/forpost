@@ -1,8 +1,19 @@
-"""Command execution via subprocess."""
+"""Command execution via subprocess, with bounded output and timeout.
+
+Output is drained on background threads into a fixed-size ring buffer, so a
+command producing gigabytes of output cannot spike memory or fill the disk:
+we keep only the last MAX_OUTPUT_CHARS bytes (the tail, where a command's
+conclusion / final error usually is) and count what was dropped. Draining the
+full stream (rather than stopping early) keeps the child from blocking on a
+full pipe; the overall timeout bounds wall-clock time.
+"""
 
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
+
+READ_CHUNK = 65536
 
 
 @dataclass
@@ -14,49 +25,78 @@ class CommandResult:
     exit_code: int
 
 
-def _cap(text: str) -> str:
-    """Truncate output to MAX_OUTPUT_CHARS, keeping the tail (where a command's
-    conclusion / final error usually is). Protects the response, the model's
-    context, and the on-disk log from runaway output.
+def _output_limit() -> int:
+    return int(os.environ.get("MAX_OUTPUT_CHARS", "100000"))
 
-    Note: this caps what we RETURN and LOG; the transient in-memory buffer from
-    capture_output is not itself bounded here (that needs streaming reads - left
-    for the async-job phase).
-    """
-    limit = int(os.environ.get("MAX_OUTPUT_CHARS", "100000"))
-    if limit and text is not None and len(text) > limit:
-        omitted = len(text) - limit
-        return f"[... {omitted} earlier chars truncated ...]\n" + text[-limit:]
-    return text or ""
+
+class _CappedReader(threading.Thread):
+    """Drain a binary stream fully while retaining only the last `cap` bytes."""
+
+    def __init__(self, stream, cap: int):
+        super().__init__(daemon=True)
+        self._stream = stream
+        self._cap = cap
+        self._buf = bytearray()
+        self._discarded = 0
+
+    def run(self) -> None:
+        try:
+            while True:
+                data = self._stream.read(READ_CHUNK)
+                if not data:
+                    break
+                self._buf += data
+                if self._cap and len(self._buf) > self._cap:
+                    overflow = len(self._buf) - self._cap
+                    del self._buf[:overflow]
+                    self._discarded += overflow
+        except (ValueError, OSError):
+            pass  # stream closed under us (e.g. after the process was killed)
+
+    def text(self) -> str:
+        body = self._buf.decode("utf-8", errors="replace")
+        if self._discarded:
+            return f"[... {self._discarded} earlier bytes truncated ...]\n" + body
+        return body
 
 
 def execute(command: str, timeout: int | None = None) -> CommandResult:
     """
-    Execute a shell command and capture output.
+    Execute a shell command and capture output (bounded, streamed).
 
     Args:
         command: The shell command to execute.
         timeout: Optional timeout in seconds. None means no timeout.
 
     Returns:
-        CommandResult with stdout, stderr, and exit_code.
+        CommandResult with stdout, stderr, and exit_code (-1 on timeout).
     """
+    cap = _output_limit()
+    proc = subprocess.Popen(
+        command,
+        shell=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    out_reader = _CappedReader(proc.stdout, cap)
+    err_reader = _CappedReader(proc.stderr, cap)
+    out_reader.start()
+    err_reader.start()
+
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return CommandResult(
-            stdout=_cap(result.stdout),
-            stderr=_cap(result.stderr),
-            exit_code=result.returncode,
-        )
-    except subprocess.TimeoutExpired as e:
-        return CommandResult(
-            stdout=_cap(e.stdout or "" if isinstance(e.stdout, str) else (e.stdout or b"").decode()),
-            stderr=_cap(e.stderr or "" if isinstance(e.stderr, str) else (e.stderr or b"").decode()),
-            exit_code=-1,
-        )
+        proc.wait(timeout=timeout)
+        exit_code = proc.returncode
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        exit_code = -1
+
+    # Readers finish once the pipes reach EOF (which the exit/kill guarantees).
+    out_reader.join()
+    err_reader.join()
+
+    return CommandResult(
+        stdout=out_reader.text(),
+        stderr=err_reader.text(),
+        exit_code=exit_code,
+    )

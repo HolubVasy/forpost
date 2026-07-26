@@ -61,3 +61,12 @@ class TestExecutor:
         assert result.exit_code == 0
         assert len(result.stdout) < 200  # capped well below the 500 produced
         assert "truncated" in result.stdout
+
+    def test_large_output_is_memory_bounded(self):
+        # ~2 MB of output; default cap 100k -> result stays small, tail kept,
+        # and the process must not blow up memory or error.
+        result = execute(f'{PY} -c "print(\'x\'*2000000)"')
+        assert result.exit_code == 0
+        assert len(result.stdout) < 200000
+        assert "truncated" in result.stdout
+        assert result.stdout.rstrip().endswith("x")  # tail preserved

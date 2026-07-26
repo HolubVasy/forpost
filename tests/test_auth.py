@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI, Depends
 from fastapi.testclient import TestClient
 
-from app.auth import verify_api_key
+from app.auth import keys_match, verify_api_key
 
 # Minimal app for testing the auth dependency in isolation
 app = FastAPI()
@@ -49,3 +49,16 @@ class TestAuth:
         response = client.get("/protected", headers={"X-API-Key": ""})
         assert response.status_code == 401
         assert "Invalid" in response.json()["detail"]
+
+
+class TestKeysMatch:
+    """Constant-time comparison helper."""
+
+    def test_equal_keys_match(self):
+        assert keys_match("abc123", "abc123") is True
+
+    def test_different_keys_do_not_match(self):
+        assert keys_match("abc123", "abc124") is False
+
+    def test_different_length_keys_do_not_match(self):
+        assert keys_match("abc", "abc123") is False
