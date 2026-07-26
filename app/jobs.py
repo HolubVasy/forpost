@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.errors import ForPostError
-from app.executor import _NEW_SESSION, child_env, kill_process_tree
+from app.executor import _NEW_SESSION, build_popen_args, kill_process_tree
 
 _TERMINAL = {"done", "timeout", "killed", "error"}
 
@@ -75,7 +75,13 @@ class JobManager:
 
     # --- lifecycle -------------------------------------------------------
 
-    def start(self, command: str, timeout: int) -> str:
+    def start(
+        self,
+        command: str,
+        timeout: int,
+        restricted: bool = False,
+        git_token: str | None = None,
+    ) -> str:
         with self._lock:
             self._reap_locked(time.time())
             running = sum(1 for j in self._jobs.values() if j.status == "running")
@@ -88,13 +94,14 @@ class JobManager:
         log_path = _jobs_dir() / f"{job_id}.log"
         job = Job(id=job_id, command=command, log_path=str(log_path))
         logf = open(log_path, "wb")
+        popen = build_popen_args(command, restricted, git_token)
         proc = subprocess.Popen(
-            command,
-            shell=True,
+            popen["args"],
+            shell=popen["shell"],
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=_NEW_SESSION,
-            env=child_env(),
+            env=popen["env"],
         )
         with self._lock:
             self._jobs[job_id] = job

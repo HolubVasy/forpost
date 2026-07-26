@@ -13,17 +13,17 @@ class Mode(str, Enum):
 
 # Explicit set of allowed read command prefixes for read-only mode.
 # Based on an allowlist approach (not a denylist of write commands).
+# read-only runs as the unprivileged RESTRICTED_COMMAND_USER (no docker group),
+# so docker commands are intentionally absent - docker inspection is full-access.
 ALLOWED_READ_PREFIXES = (
     "cat ",
     "df ",
     "df",
-    "docker logs",
-    "docker ps",
     "echo ",
-    # NOTE: `docker inspect` and `env` are intentionally NOT here - they leak
-    # secrets (neighbouring containers' env, this app's own env). `find` is
-    # excluded too (`find -delete`/`-exec rm` would make read-only destructive).
-    # Use full-access for any of these.
+    # NOTE: `docker *`, `docker inspect` and `env` are intentionally NOT here -
+    # docker needs the socket (root-equivalent) and `env`/`docker inspect` leak
+    # secrets. `find` is excluded too (`find -delete`/`-exec` would make
+    # read-only destructive). Use full-access for any of these.
     "git branch",
     "git diff",
     "git log",

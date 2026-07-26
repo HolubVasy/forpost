@@ -77,26 +77,27 @@ Declared per call. They gate what a command is allowed to do:
 
 | Mode | Behavior |
 |------|----------|
-| `read-only` | Inspection only (`ls`, `cat`, `docker ps/logs`, `git status`, `df`, `ps`…). Write commands **and** shell metacharacters (`; \| & \` $ ( ) < >`, newlines) are rejected. |
-| `whitelist` | Only commands matching an entry in `whitelist.config` on the VPS (e.g. `git pull`, `docker compose up`, `docker logs`, and read-only `gh pr list/view/diff`, `gh repo view`, `gh issue list/view`); metacharacters likewise rejected. |
-| `full-access` | Anything runs immediately, no gate. |
+| `read-only` | Local inspection only (`ls`, `cat`, `git status/log`, `df`, `ps`…). Write commands **and** shell metacharacters (`; \| & \` $ ( ) < >`, newlines) are rejected. No git token, no docker. |
+| `whitelist` | Only commands matching `whitelist.config` on the VPS — `git pull/fetch/status/log` and read-only `gh pr list/view/diff`, `gh repo view`, `gh issue list/view`; metacharacters rejected. |
+| `full-access` | Anything runs immediately, no gate — docker, pipes, writes, the personal git token. |
 
-`read-only` and `whitelist` are guardrails — **protection from self**, not a
-sandbox. They stop chaining a second command in (`ls; rm -rf`), reject secret
-readers (`env`, `docker inspect`) and match on token boundaries (so `ps` does
-not allow `psql`). But they do **not** neuter an allowed command's own dangerous
-flags. Notes:
+`read-only` and `whitelist` are guardrails — but, unlike a plain string filter,
+they are backed by **privilege separation**: those commands run as a separate
+unprivileged user (`forpost-ro`), so they can't read the app's environment
+(`/proc/1/environ`), the API key, the audit log, or the docker socket. They also
+reject command chaining (`ls; rm -rf`) and match on token boundaries (so `ps`
+does not allow `psql`). Notes:
 
-- **File writes/deletes require `full-access`** (a `whitelist` write + a
-  whitelisted `docker compose up` could otherwise plant a malicious compose and
-  escalate to the host). `read_file` is allowed in any mode.
-- Executed commands run with the `API_KEY` **stripped** from their environment,
-  so a command can't print the auth key. (`GITHUB_TOKEN` is kept for `gh`/`git`.
-  Residual: `cat /proc/1/environ` of the app process can still see it — a
-  narrower vector, closed only by removing it from the app env; not done yet.)
+- **File writes/deletes require `full-access`** (a `whitelist` write + docker
+  could otherwise plant a malicious compose and escalate). `read_file` is any mode.
+- **Docker needs the socket** (root-equivalent), so `docker ps`/`docker logs`/
+  compose are **full-access only** — they left read-only and the whitelist.
+- **Git tokens are scoped by mode:** read-only gets none; whitelist gets the
+  **work** token (read commands only → the work repo can't be written);
+  full-access gets the **personal** token (full rights on your own repos).
 
-Use `full-access` consciously when you actually need pipes or chaining. All
-three modes are fully logged.
+Use `full-access` consciously — it's the root-equivalent escape hatch. All three
+modes are fully logged.
 
 ## Long-running commands (async jobs)
 
@@ -145,7 +146,15 @@ request before anything runs; miss both → `401`, nothing executes or logs:
    (via Google's `tokeninfo`, cached ~5 min) and matches the allow-list, so
    arbitrary Google users can't get in. Discovery is standard RFC 9728: a `401`
    carries `WWW-Authenticate`, and `/.well-known/oauth-protected-resource`
-   advertises the metadata. Turned off, ForPost stays key-only.
+   advertises the metadata. Turned off, ForPost stays key-only. Set
+   `MCP_REQUIRE_OAUTH=true` to make `/mcp` **OAuth-only** — the key is then
+   refused there (it still guards REST), so a leaked key can't drive the MCP
+   tunnel; only an allow-listed Google account can.
+
+**Privilege separation.** read-only/whitelist commands run as an unprivileged
+user (`forpost-ro`) that can't read the app's environment, the API key, the
+audit log, or the docker socket — so a restricted command cannot exfiltrate the
+key and self-escalate. See [Modes](#modes).
 
 Additional layers on the VPS: nginx `limit_req`/`limit_conn` (flood &
 brute-force protection, returns 429) and an app-level rate limit
@@ -173,10 +182,13 @@ Any MCP client can discover ForPost's capabilities over the wire:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `API_KEY` | — (required) | Auth key (`openssl rand -hex 32`). |
-| `GITHUB_TOKEN` | empty | Optional; only needed when `gh` is used inside the tunnel. |
+| `GITHUB_TOKEN` | empty | Personal git token — exposed only in **full-access** (repo create, push, gh). |
+| `GITHUB_WORK_TOKEN` | empty | Work git token — exposed only in **whitelist** (read commands), so the work repo can't be written. |
 | `OAUTH_ENABLED` | `false` | Also accept a Google bearer on `/mcp` (resource-server verify + email allow-list). |
 | `OAUTH_CLIENT_ID` | empty | Google OAuth client ID a bearer's audience must match. |
 | `OAUTH_ALLOWED_EMAILS` | empty | Comma-separated allow-list: exact emails and/or `@domain`. |
+| `MCP_REQUIRE_OAUTH` | `false` | Make `/mcp` OAuth-only (refuse `X-API-Key` there; needs `OAUTH_ENABLED`). |
+| `RESTRICTED_COMMAND_USER` | empty | User read-only/whitelist commands run as (set to `forpost-ro` by the image). |
 | `PUBLIC_URL` | `https://forpost.poly-mind.net` | External base, published in the OAuth metadata. |
 | `PORT` | 8000 | Container listen port. |
 | `RATE_LIMIT_PER_MINUTE` | 120 | App-level rate limit on actions (queries exempt). |

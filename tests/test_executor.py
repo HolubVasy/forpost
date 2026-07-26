@@ -67,9 +67,14 @@ class TestExecutor:
 
         monkeypatch.setenv("API_KEY", "supersecret")
         monkeypatch.setenv("GITHUB_TOKEN", "ghtok")
+        # No scope (read-only): API_KEY and the git token are both absent.
         env = child_env()
-        assert "API_KEY" not in env  # auth key must not leak to commands
-        assert env.get("GITHUB_TOKEN") == "ghtok"  # gh/git still work
+        assert "API_KEY" not in env
+        assert "GITHUB_TOKEN" not in env
+        # personal scope (full-access): the personal token is exposed for gh/git.
+        env = child_env("personal")
+        assert "API_KEY" not in env
+        assert env.get("GITHUB_TOKEN") == "ghtok"
 
     def test_executed_command_cannot_read_api_key(self, monkeypatch):
         monkeypatch.setenv("API_KEY", "supersecret")

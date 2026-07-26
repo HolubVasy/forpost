@@ -41,8 +41,6 @@ class TestReadOnlyMode:
     """read-only: allowed read commands pass, write commands rejected."""
 
     @pytest.mark.parametrize("cmd", [
-        "docker ps",
-        "docker logs mycontainer",
         "ls",
         "ls -la /home",
         "cat /etc/hostname",
@@ -60,6 +58,8 @@ class TestReadOnlyMode:
 
     @pytest.mark.parametrize("cmd", [
         "rm -rf /",
+        "docker ps",                   # docker needs the socket -> full-access
+        "docker logs mycontainer",     # (read-only runs as the unprivileged user)
         "docker restart mycontainer",
         "docker rm mycontainer",
         "git push",

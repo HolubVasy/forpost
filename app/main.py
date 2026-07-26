@@ -39,6 +39,13 @@ async def _send_json_error(send, status: int, message: str, extra_headers=None) 
     await send({"type": "http.response.body", "body": body})
 
 
+def _mcp_requires_oauth() -> bool:
+    """When set, /mcp accepts ONLY a Google-OIDC bearer - the static X-API-Key is
+    rejected there (it stays valid for the REST surface). This makes a leaked key
+    unusable on the MCP tunnel: only an allow-listed Google account can drive it."""
+    return os.environ.get("MCP_REQUIRE_OAUTH", "").strip().lower() in ("1", "true", "yes")
+
+
 def _www_authenticate_headers():
     """On 401, point an MCP client at our protected-resource metadata (RFC 9728)
     so it can discover the OAuth server. Only when OAuth is enabled."""
@@ -77,14 +84,16 @@ class MCPApiKeyGuard:
 
     @staticmethod
     async def _authenticated(headers: dict) -> bool:
-        # 1) static X-API-Key - primary model (also used by REST/tests/curl).
-        provided = headers.get(b"x-api-key", b"").decode()
-        try:
-            expected = get_api_key()
-        except RuntimeError:
-            expected = None
-        if expected and keys_match(provided, expected):
-            return True
+        # 1) static X-API-Key - unless /mcp is configured OAuth-only, in which
+        #    case the key is not accepted here (it still guards the REST surface).
+        if not (_mcp_requires_oauth() and oauth_enabled()):
+            provided = headers.get(b"x-api-key", b"").decode()
+            try:
+                expected = get_api_key()
+            except RuntimeError:
+                expected = None
+            if expected and keys_match(provided, expected):
+                return True
         # 2) Google OAuth bearer, only when enabled. verify_bearer blocks on a
         #    network call to Google, so run it off the event loop.
         if oauth_enabled():
@@ -98,6 +107,7 @@ class MCPApiKeyGuard:
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
+    service.harden_runtime_permissions()
     get_app_logger().info("ForPost started")
     # The MCP session manager must run for the streamable-HTTP endpoint to work.
     async with mcp.session_manager.run():

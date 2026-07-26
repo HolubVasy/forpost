@@ -38,14 +38,20 @@ Surface (both MCP tools and REST endpoints, sharing the same logic):
 
 ## Modes (declared per call)
 
-- `read-only` — inspection only; write commands **and** shell metacharacters
-  (`; | & \` $ ( ) < >`, newlines) are rejected.
-- `whitelist` — command must match `whitelist.config`; metacharacters likewise
-  rejected.
-- `full-access` — anything, immediately, fully logged.
+- `read-only` — local inspection only (no docker, no git token); write commands
+  **and** shell metacharacters (`; | & \` $ ( ) < >`, newlines) are rejected.
+- `whitelist` — command must match `whitelist.config` (git + read-only gh);
+  metacharacters likewise rejected.
+- `full-access` — anything, immediately, fully logged (docker, personal token).
 
-Guardrails are "protection from self", not a sandbox: they don't neuter an
-allowed command's own dangerous flags. `full-access` is the escape hatch.
+read-only/whitelist are backed by **privilege separation**: they run as the
+unprivileged `RESTRICTED_COMMAND_USER` (`forpost-ro`), so they cannot read the
+app env (`/proc/1/environ`), the API key, the audit log, or the docker socket —
+that is what makes read-only a real confidentiality boundary, not just a string
+filter. Docker (needs the socket) is full-access only. Git tokens are scoped by
+mode: read-only none, whitelist the **work** token (read-only in practice),
+full-access the **personal** token. `full-access` runs as `forpost` (docker
+group) — the root-equivalent escape hatch.
 
 ## Stack
 

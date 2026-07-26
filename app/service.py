@@ -31,12 +31,54 @@ def clamp_timeout(requested: int) -> int:
     return max(1, min(int(requested), hard_max))
 
 
+def harden_runtime_permissions() -> None:
+    """Best-effort at startup: lock down dir perms so a volume created before
+    privilege separation still hides the audit log and app env from the
+    restricted user. Mirrors the Dockerfile chmods; POSIX only, never fatal."""
+    if os.name != "posix":
+        return
+    # Group-writable new files so the shared workspace works both ways (the app
+    # as forpost, git/gh as forpost-ro), backed by the setgid workspace dir.
+    os.umask(0o002)
+    logs = Path(os.environ.get("LOGS_DIR", "logs"))
+    workspace = _get_workspace_root()
+    targets = [(workspace, 0o2770), (workspace.parent, 0o710), (logs, 0o700)]
+    for path, mode in targets:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+
+def _privilege(mode: Mode) -> tuple[bool, str | None]:
+    """(restricted, git_token_scope) for a mode.
+
+    - read-only / whitelist run *restricted* (unprivileged user) so they can't
+      read the app env or docker socket; full-access runs as the app user.
+    - token scope: read-only gets none; whitelist gets the *work* token (only
+      read commands there, so the work repo can never be written); full-access
+      gets the *personal* token (full rights on your own repos).
+    """
+    if mode == Mode.FULL_ACCESS:
+        return (False, "personal")
+    if mode == Mode.WHITELIST:
+        return (True, "work")
+    return (True, None)  # read-only
+
+
 def run_command(command: str, mode: Mode, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """Validate, run synchronously, log, and return the result."""
     allowed, reason = validate_command(command, mode)
     if not allowed:
         raise ForPostError(403, reason)
-    result = execute(command, timeout=clamp_timeout(timeout))
+    restricted, git_token = _privilege(mode)
+    result = execute(
+        command,
+        timeout=clamp_timeout(timeout),
+        restricted=restricted,
+        git_token=git_token,
+    )
     log_command(
         command=command,
         mode=mode.value,
@@ -57,7 +99,10 @@ def start_job(command: str, mode: Mode, timeout: int = DEFAULT_JOB_TIMEOUT) -> d
     allowed, reason = validate_command(command, mode)
     if not allowed:
         raise ForPostError(403, reason)
-    job_id = job_manager.start(command, clamp_timeout(timeout))
+    restricted, git_token = _privilege(mode)
+    job_id = job_manager.start(
+        command, clamp_timeout(timeout), restricted=restricted, git_token=git_token
+    )
     log_command(
         command=command,
         mode=mode.value,

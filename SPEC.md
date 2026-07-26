@@ -12,9 +12,11 @@ description use `README.md` and `CLAUDE.md`. In short, as built and deployed:
   All exposed as both MCP tools and REST endpoints over one shared service layer.
   (Supersedes the early "one tool, no write_file, no polling" notes.)
 - **Modes:** read-only / whitelist / full-access; read-only & whitelist also
-  reject shell metacharacters. `whitelist.config` allows git pull/fetch/status/
-  log, docker restart/logs, docker compose up/down/pull, and read-only `gh`
-  (pr list/view/diff/status/checks, repo view, issue list/view).
+  reject shell metacharacters **and run as an unprivileged user** (privilege
+  separation - see decision below). read-only allows local inspection (ls, cat,
+  git status/log, df, ps...); `whitelist.config` allows git pull/fetch/status/
+  log + read-only `gh` (pr list/view/diff/status/checks, repo view, issue
+  list/view). Docker commands need the socket, so they are full-access only.
 - **Timeout:** per-call `timeout` (default 300s, max `MAX_TIMEOUT_SECONDS`),
   not a hardcoded 5 min.
 - **Output:** streamed, memory-bounded, capped (`MAX_OUTPUT_CHARS`).
@@ -383,6 +385,46 @@ flow. So `/mcp` gained an **optional** second credential, enabled with
 
 This is not multi-user auth — it's a single-user allow-list so that arbitrary
 Google users can't reach a publicly-hosted `/mcp`.
+
+## Privilege Separation (2026-07-26 - makes read-only a real boundary)
+
+A review found that read-only was **not** a confidentiality boundary: `cat ` was
+allowed, and `cat /proc/1/environ` dumped the app's environment - including the
+`API_KEY`. Since a leaked key + full-access + the docker socket = root on the
+host, read-only could self-escalate. Stripping the key from the *child's* env
+did not help (the child reads PID 1's env, not its own).
+
+Fix: **restricted-mode commands run as a separate, unprivileged user.**
+
+- The container has two users: `forpost` (runs the app + full-access commands;
+  in the docker group) and `forpost-ro` (runs read-only/whitelist commands; in
+  the `forpost` group for the shared workspace, but NOT the docker group). The
+  app launches restricted commands as `forpost-ro` via `sudo -n -H -u` (a
+  NOPASSWD sudoers rule for that runas only). Config: `RESTRICTED_COMMAND_USER`
+  (empty locally / on Windows = run in-process, no drop).
+- Because `forpost-ro` is a different uid, `cat /proc/1/environ` and reading
+  `forpost`-owned files return *permission denied* - `/proc/<pid>/environ` is
+  0400 by uid, and the logs dir is 0700. So read-only cannot read the key,
+  the audit log, or the docker socket. Docker inspection therefore moved to
+  full-access; `docker ps`/`docker logs` left the read-only allow-list and the
+  docker entries left `whitelist.config`.
+- **Token scoping by mode** (matches "work repo = read, own repos = all"):
+  read-only gets no git token; whitelist gets the **work** token
+  (`GITHUB_WORK_TOKEN`) - and since whitelist allows only read commands, ForPost
+  can never *write* to the work repo; full-access gets the **personal** token
+  (`GITHUB_TOKEN`). The chosen token is exposed as `GITHUB_TOKEN`/`GH_TOKEN`;
+  the other is never present.
+
+Full-access still runs as `forpost` with the docker socket - the escape hatch,
+root-equivalent by design. The guarantee is only about the restricted modes.
+
+## MCP OAuth-only option (2026-07-26)
+
+`MCP_REQUIRE_OAUTH=true` makes `/mcp` accept **only** a Google-OIDC bearer - the
+static `X-API-Key` is refused there (it still guards REST). So a leaked key
+cannot drive the MCP tunnel; only an allow-listed Google account can. Addresses
+the review point that, while both credentials are accepted, the key is the
+weakest link on `/mcp`.
 
 ## gh read-only in whitelist mode (2026-07-26)
 
