@@ -45,7 +45,7 @@ checks `job_status`.
 4. **You (phone):** read the one PR — code + report + proof it runs. Fixes loop
    autonomously inside the builder, so you only see the final good PR.
 5. **You:** approve → **ForPost deploys** the solution into a slot
-   `envN.dev.<host>` + a health-check.
+   `alphaN.poly-mind.net` + a health-check.
 
 Because the builder proves the real stack itself, "PR" means "it came up, logs
 are clean" — that is what removes the deploy → read-logs → relay → fix loop.
@@ -81,10 +81,12 @@ works, then open a PR with a summary"
 
 ## Deploy slots (where solutions run)
 
-A **fixed pool** `env1|env2|env3.dev.<host>` — one SAN cert via HTTP-01 (no
-wildcard, no DNS-01 hassle). ForPost deploys a solution into a free slot and
-frees it on command. Up to three solutions live at once. Test stacks the builder
-brings up are **ephemeral inside its rootless docker** and never touch the pool.
+A **fixed pool** `alpha1|alpha2|alpha3.poly-mind.net` — one SAN cert via HTTP-01 (no
+wildcard, no DNS-01 hassle). Names are neutral and reusable (a slot is a
+container; the solution inside it changes). ForPost deploys a solution into a
+free slot and frees it on command. Up to three solutions live at once. Test
+stacks the builder brings up are **ephemeral inside its rootless docker** and
+never touch the pool.
 
 ## Cleanup
 
@@ -112,4 +114,4 @@ compose.
 
 Planned (design agreed, see `CLAUDE.md`): rootless dind so the builder brings up
 full stacks itself; the PR-as-report prompt convention; ForPost deploy into
-`envN.dev.<host>` slots with compose sanitization; the master-driven fix loop.
+`alphaN.poly-mind.net` slots with compose sanitization; the master-driven fix loop.

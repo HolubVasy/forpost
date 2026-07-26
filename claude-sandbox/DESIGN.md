@@ -48,14 +48,18 @@ you (phone) ──prompt──▶ master (chat-Claude)        the brain: decides
 - **Rejected:** host socket (breaks isolation); privileged dind (host escape);
   sysbox (needs a custom runtime on the host — more infra than a lab wants).
 
-### D2 — Exposure → **fixed slots `env1|env2|env3.dev.<host>`** (not wildcard)
-- **Context:** deployed solutions need URLs; wildcard `*.dev` needs a wildcard
-  TLS cert, which forces DNS-01 (Namecheap API — fiddly).
-- **Decision:** a fixed pool of three named slots, one **SAN cert via HTTP-01**.
+### D2 — Exposure → **fixed slots `alpha1|alpha2|alpha3.poly-mind.net`** (not wildcard)
+- **Context:** deployed solutions need URLs; wildcard `*.poly-mind.net` needs a
+  wildcard TLS cert, which forces DNS-01 (Namecheap API — fiddly).
+- **Decision:** a fixed pool of three **neutrally-named** slots (`alphaN` — a slot
+  is a reusable container, its content changes; naming a slot after a solution
+  would lie once it's reused), one **SAN cert via HTTP-01**.
 - **Why:** named subdomains validate over HTTP-01 (no DNS API). Bounded resource
   use; nginx has three static blocks; ForPost just swaps what runs in a slot.
+  Three A-records on the existing domain — no new domains bought.
 - **Rejected:** wildcard + DNS-01 (hassle); a port per solution (not
-  phone-friendly).
+  phone-friendly); themed per-solution names (grow unbounded → the "помойка"
+  we're avoiding; and lie when a slot is reused).
 
 ### D3 — Secrets → **dummy for the builder's test, real at prod deploy**
 - The builder brings the stack up with **throwaway** credentials (`.env.test`);
@@ -101,7 +105,7 @@ that it's sandboxed (rootless), and code reaches prod only through your review.
 
 - **Test stack** (app+db to verify): inside the builder's rootless docker;
   brought up and torn down **by the builder**, per task; ephemeral; never exposed.
-- **Deploy slot** (`envN.dev.<host>`): on the host, deployed and freed **by
+- **Deploy slot** (`alphaN.poly-mind.net`): on the host, deployed and freed **by
   ForPost** on command; persistent (a running service you use); max three.
 
 ## 6. Out of scope
@@ -118,5 +122,5 @@ that it's sandboxed (rootless), and code reaches prod only through your review.
 2. **Next:** rootless dind so the builder brings up full stacks itself.
 3. **Then:** PR-as-report prompt convention; a DB-backed POC (app + Postgres)
    that exercises D3.
-4. **Then:** ForPost deploy into `envN.dev.<host>` slots with compose
+4. **Then:** ForPost deploy into `alphaN.poly-mind.net` slots with compose
    sanitization; the master-driven fix loop (D6).

@@ -61,9 +61,10 @@ Every PR description must carry, so the human never has to chase anything:
 
 ## Deploy slots
 
-Solutions run in a **fixed pool** `env1|env2|env3.dev.<host>` (one SAN cert via
-HTTP-01 — no wildcard, no DNS-01). ForPost deploys a solution into a slot and
-frees it on command; slots are the only externally-exposed surface.
+Solutions run in a **fixed pool** `alpha1|alpha2|alpha3.poly-mind.net` (one SAN cert
+via HTTP-01 — no wildcard, no DNS-01). Names are neutral and reusable: a slot is
+a container, its content changes; ForPost deploys a solution into a free slot and
+frees it on command. Slots are the only externally-exposed surface.
 
 ## What NOT to do
 
