@@ -154,6 +154,21 @@ it (edit `.env`, `docker compose up -d`).
 (anything runs immediately). Choose read-only or whitelist when you want a brake.
 All three are fully logged regardless.
 
+To keep the guardrails real, read-only and whitelist **reject shell
+metacharacters** (`; | & \` $ ( ) < >`, newlines) so an allowed prefix can't
+smuggle a second command (`ls; rm -rf`). This is protection-from-self, not a
+sandbox - it does not neuter an allowed command's own dangerous flags
+(`find -delete`); use full-access consciously when you need chaining or pipes.
+
+## Timeouts and output
+
+`execute_command` takes an optional per-call `timeout` (seconds, default 300),
+clamped to `MAX_TIMEOUT_SECONDS` (default 1800). The command runs in a worker
+thread, so a long build doesn't block `/health`. Returned/logged output is
+capped at `MAX_OUTPUT_CHARS` (default 100000, tail kept). Following the live
+progress of a long command (job IDs / streaming) is intentionally **not** yet
+implemented - background it and `tail` the log via separate calls if needed.
+
 ## Out of scope
 
 No multi-user auth, no orchestration dashboard, no automated rollback,

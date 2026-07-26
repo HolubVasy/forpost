@@ -62,7 +62,8 @@ class TestSchema:
     def test_execute_command_schema(self):
         ec = next(t for t in list_tools() if t.name == "execute_command")
         props = ec.inputSchema["properties"]
-        assert set(props) == {"command", "mode"}
+        assert set(props) == {"command", "mode", "timeout"}
+        # timeout has a default, so only command + mode are required
         assert set(ec.inputSchema["required"]) == {"command", "mode"}
 
     def test_file_tool_schemas(self):
@@ -104,6 +105,17 @@ class TestExecuteCommand:
     def test_full_access_allows_any(self):
         res = call("execute_command", {"command": "echo full", "mode": "full-access"})
         assert "full" in res["stdout"]
+
+    def test_execute_accepts_timeout_param(self):
+        res = call(
+            "execute_command",
+            {"command": "echo t", "mode": "full-access", "timeout": 5},
+        )
+        assert "t" in res["stdout"]
+
+    def test_read_only_rejects_shell_chaining(self):
+        with pytest.raises(ToolError, match="metacharacter"):
+            call("execute_command", {"command": "ls; rm -rf x", "mode": "read-only"})
 
     def test_missing_required_param_errors_and_no_execution(self, setup_env):
         with pytest.raises(ToolError):

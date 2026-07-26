@@ -207,17 +207,37 @@ For file operations, response includes the relevant field (e.g. content
 for read_file, success/path for write_file). No further structure -
 plaintext is the default, keep it simple.
 
-## Command Timeout (2026-06-15)
+## Command Timeout (2026-06-15, revised 2026-07-26)
 
-Every command run via execute_command has a hard timeout of **5 minutes**,
-hardcoded (not configurable via .env). If the process doesn't finish
-within 5 minutes, Forpost kills it and returns whatever stdout/stderr
-was captured so far, plus a status indicating "timed out".
+Every command run via execute_command has a timeout. Original decision was a
+hardcoded 5 minutes; **revised 2026-07-26** to a **per-call `timeout`
+parameter** (default 300s) clamped to a server max `MAX_TIMEOUT_SECONDS`
+(default 1800s). On timeout ForPost kills the process and returns whatever
+stdout/stderr was captured so far, plus `timed_out=true`.
+
+The command runs in a worker thread so a long command does not block the event
+loop (and `/health` stays responsive during it).
 
 This stays synchronous - one request, one response. No request IDs, no
 polling, no separate kill endpoint. If something hangs, the timeout
 auto-kills it and Claude sees "timed out" in the response, then can
 follow up (e.g. `docker ps` to check for leftover processes).
+
+## Command Safety in read-only / whitelist (2026-07-26)
+
+read-only and whitelist validate by allowed command prefix, but the command is
+run through a shell - so a bare prefix check would let `ls; rm -rf` or
+`git && curl|sh` smuggle a second command. Therefore **shell metacharacters
+(`; | & \` $ ( ) < >` and newlines) are rejected** in read-only and whitelist
+mode. This is "protection from self", not a sandbox: it does not neuter
+dangerous flags of an otherwise-allowed command (e.g. `find -delete`).
+full-access is the deliberate escape hatch for chaining/pipes.
+
+## Output Truncation (2026-07-26)
+
+Command stdout/stderr returned and logged are capped at `MAX_OUTPUT_CHARS`
+(default 100000), keeping the tail, to protect the response, the model's
+context, and the on-disk log from runaway output.
 
 ## Workspace Cleanup (2026-06-15)
 

@@ -45,6 +45,19 @@ ALLOWED_READ_PREFIXES = (
 )
 
 
+# Shell metacharacters that enable command chaining, substitution, or
+# redirection. Rejected in read-only/whitelist so an allowed prefix can't be
+# used to smuggle a second command (e.g. "ls; rm -rf" or "git && curl ...").
+# This is "protection from self", not a sandbox: it does NOT stop dangerous
+# flags of an otherwise-allowed command (e.g. `find -delete`). full-access is
+# the deliberate escape hatch when you really need chaining/pipes.
+_SHELL_METACHARS = frozenset(";|&`$()<>\n\r")
+
+
+def _has_shell_metachars(command: str) -> bool:
+    return any(ch in _SHELL_METACHARS for ch in command)
+
+
 def _load_whitelist() -> list[str]:
     """Load allowed command prefixes from whitelist.config."""
     config_path = Path(os.environ.get("WHITELIST_PATH", "whitelist.config"))
@@ -71,6 +84,13 @@ def validate_command(command: str, mode: Mode) -> tuple[bool, str]:
 
     if mode == Mode.FULL_ACCESS:
         return True, ""
+
+    # read-only and whitelist must not allow shell chaining/substitution.
+    if _has_shell_metachars(command):
+        return False, (
+            "Shell metacharacters (; | & ` $ ( ) < >) are not allowed in "
+            "read-only/whitelist mode - use full-access for chaining/pipes"
+        )
 
     if mode == Mode.READ_ONLY:
         for prefix in ALLOWED_READ_PREFIXES:

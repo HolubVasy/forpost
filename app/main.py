@@ -1,5 +1,6 @@
 """ForPost - main FastAPI application."""
 
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -7,7 +8,14 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
+
+
+def _clamp_timeout(requested: int) -> int:
+    """Clamp a per-request timeout to [1, MAX_TIMEOUT_SECONDS] (default 1800)."""
+    hard_max = int(os.environ.get("MAX_TIMEOUT_SECONDS", "1800"))
+    return max(1, min(int(requested), hard_max))
 
 from app.auth import get_api_key, verify_api_key
 from app.executor import execute
@@ -80,6 +88,8 @@ async def health():
 class ExecuteRequest(BaseModel):
     command: str
     mode: Mode
+    # Per-call timeout in seconds (default 5 min, clamped to MAX_TIMEOUT_SECONDS).
+    timeout: int = 300
 
 
 class ExecuteResponse(BaseModel):
@@ -103,8 +113,10 @@ async def execute_command(
         logger.warning(f"Command rejected: {reason}")
         raise HTTPException(status_code=403, detail=reason)
 
-    # Execute with 5-minute hard timeout
-    result = execute(request.command, timeout=300)
+    # Execute in a worker thread so a long command doesn't block the event
+    # loop (and /health). Timeout is per-call, clamped to the hard max.
+    timeout = _clamp_timeout(request.timeout)
+    result = await run_in_threadpool(execute, request.command, timeout)
     timed_out = result.exit_code == -1
 
     # Log the command execution

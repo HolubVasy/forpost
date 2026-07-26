@@ -12,6 +12,8 @@ connector settings send it as a header once), not as a per-tool argument -
 keeping the tool schema clean and matching how MCP connectors are configured.
 """
 
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,8 +42,13 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
-# Hard timeout for every command, per SPEC (5 minutes, not configurable).
-COMMAND_TIMEOUT = 300
+# Default per-call timeout (seconds); callers may override, clamped to the max.
+DEFAULT_TIMEOUT = 300
+
+
+def _clamp_timeout(requested: int) -> int:
+    hard_max = int(os.environ.get("MAX_TIMEOUT_SECONDS", "1800"))
+    return max(1, min(int(requested), hard_max))
 
 
 def _guard() -> None:
@@ -53,12 +60,15 @@ def _guard() -> None:
 
 
 @mcp.tool()
-def execute_command(command: str, mode: Mode) -> dict:
+def execute_command(command: str, mode: Mode, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """Run a shell command on the VPS and return its output.
 
     Args:
         command: The shell command to run.
         mode: One of "read-only", "whitelist", or "full-access".
+        timeout: Per-call timeout in seconds (default 300, clamped to the
+            server max). On timeout the process is killed and partial output is
+            returned with timed_out=true.
 
     Returns stdout, stderr, exit_code, and timed_out.
     """
@@ -68,7 +78,7 @@ def execute_command(command: str, mode: Mode) -> dict:
     if not allowed:
         raise ValueError(reason)
 
-    result = execute(command, timeout=COMMAND_TIMEOUT)
+    result = execute(command, timeout=_clamp_timeout(timeout))
     log_command(
         command=command,
         mode=mode.value,

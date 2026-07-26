@@ -1,8 +1,12 @@
 """Tests for app/executor.py - subprocess execution."""
 
+import sys
+
 import pytest
 
 from app.executor import execute
+
+PY = f'"{sys.executable}"'  # portable python invocation (Windows + Linux)
 
 
 class TestExecutor:
@@ -34,13 +38,15 @@ class TestExecutor:
         assert result.stderr != ""
 
     def test_timeout_kills_long_running_command(self):
-        # Use python to sleep - cross-platform
-        result = execute("py -c \"import time; time.sleep(10)\"", timeout=1)
+        result = execute(f'{PY} -c "import time; time.sleep(10)"', timeout=1)
         assert result.exit_code == -1
 
     def test_timeout_returns_partial_stdout(self):
-        # Print then sleep - stdout captured before timeout
-        result = execute("py -c \"import time; print('before_timeout'); time.sleep(10)\"", timeout=1)
+        # Print (flushed) then sleep - stdout captured before the kill.
+        result = execute(
+            f"{PY} -c \"import time; print('before_timeout', flush=True); time.sleep(10)\"",
+            timeout=2,
+        )
         assert result.exit_code == -1
         assert "before_timeout" in result.stdout
 
@@ -48,3 +54,10 @@ class TestExecutor:
         result = execute("echo fast", timeout=5)
         assert result.exit_code == 0
         assert "fast" in result.stdout
+
+    def test_output_is_capped(self, monkeypatch):
+        monkeypatch.setenv("MAX_OUTPUT_CHARS", "50")
+        result = execute(f'{PY} -c "print(\'a\'*500)"')
+        assert result.exit_code == 0
+        assert len(result.stdout) < 200  # capped well below the 500 produced
+        assert "truncated" in result.stdout

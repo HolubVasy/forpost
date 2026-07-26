@@ -65,6 +65,24 @@ class TestIntegration:
         jsonl_file = setup_env / "commands.jsonl"
         assert not jsonl_file.exists() or jsonl_file.read_text().strip() == ""
 
+    def test_metachar_command_rejected_in_read_only(self, client, setup_env):
+        response = client.post(
+            "/execute",
+            json={"command": "ls; rm -rf /tmp/x", "mode": "read-only"},
+            headers=HEADERS,
+        )
+        assert response.status_code == 403
+        assert "metacharacter" in response.json()["detail"].lower()
+
+    def test_custom_timeout_param_accepted(self, client, setup_env):
+        response = client.post(
+            "/execute",
+            json={"command": "echo hi", "mode": "full-access", "timeout": 5},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+        assert "hi" in response.json()["stdout"]
+
     def test_missing_api_key_returns_401(self, client, setup_env):
         response = client.post(
             "/execute",
