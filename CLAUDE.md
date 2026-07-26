@@ -15,6 +15,9 @@ Surface (both MCP tools and REST endpoints, sharing the same logic):
   (poll for progress + pagination).
 - `write_file` / `read_file` / `delete_file` — byte transport within the
   workspace.
+- `diagnostics` — one-call health snapshot (alive?, memory, jobs, versions,
+  recent failures).
+- `reset` — self-cleanup by scope (`jobs` / `logs` / `workspace` / `all`).
 
 ## Core principles
 
@@ -24,8 +27,11 @@ Surface (both MCP tools and REST endpoints, sharing the same logic):
 - Two separate log streams: `commands.jsonl` (audit trail of what was run) and
   `app.log` (ForPost's own operational logs). Don't mix them.
 - No database. Logs are JSONL files.
-- Single static API key is the entire auth model (no OAuth, multi-user, or IP
-  allowlist). Intentional for a personal tool. Compare it in constant time.
+- Auth is a static API key (`X-API-Key`, constant-time compare), plus an
+  **optional** Google-OIDC layer on `/mcp` only (`app/oauth.py`): ForPost is a
+  resource server that verifies a Google bearer's audience + verified email
+  against an allow-list — no multi-user accounts, no IP allowlist. A request is
+  accepted if it satisfies *either* credential. Intentional for a personal tool.
 - The REST endpoints and the MCP tools must stay behaviourally identical — they
   reuse the same building blocks (`validate_command`, `execute`, `jobs`,
   `file_ops`, logging). Change the shared logic, not one surface.
@@ -49,13 +55,14 @@ fronted by nginx for HTTPS.
 
 ## Deployment status
 
-Phases 1–4 done; Phase 5 backend done. Live at `https://forpost.poly-mind.net`
-(German Zomro VPS `188.137.227.248`, code in `/opt/forpost`) behind the shared
+Phases 1–5 done and **live** at `https://forpost.poly-mind.net` (German Zomro
+VPS `188.137.227.248`, code in `/opt/forpost`) behind the shared
 `LibreChat-NGINX` proxy on the `librechat_default` network. The app serves REST
-(`/health`, `/execute`, file ops, jobs) and the MCP endpoint `/mcp` (guarded by
-`X-API-Key` + rate limit). Only remaining: register the Claude custom connector
-and run the end-to-end mode tests from chat. Cert renewal is manual — see
-`README.md` / `SPEC.md`.
+(`/health`, `/execute`, file ops, jobs, `/diagnostics`, `/reset`) and the MCP
+endpoint `/mcp` (guarded by `X-API-Key` **or** Google-OIDC bearer + rate limit).
+The Claude Desktop connector is **registered and working via Google OIDC**
+(email allow-list). `gh` runs with two accounts' tokens (personal repo-create,
+work PR read-only). Cert renewal is manual — see `README.md` / `SPEC.md`.
 
 ## Testing
 

@@ -29,29 +29,30 @@ all reasoning stays on Claude's side.
 > Prerequisite: ForPost is deployed and reachable over HTTPS (see
 > [Deployment](#deployment-vps)). The public instance is already up.
 
-1. **Get your API key** (never paste it into chats or screenshots):
-   ```bash
-   ssh root@<your-vps> "grep ^API_KEY= /opt/forpost/.env"
-   ```
-   Copy the value after `API_KEY=`.
+`/mcp` accepts **either** auth (see [Security](#security--authentication)):
 
-2. **Add the connector** in Claude.ai → **Settings → Connectors → Add custom
-   connector**:
+- **A — Google sign-in (OAuth).** What the public instance uses. The connector
+  dialog shows a *"Sign in with Google"* button; only allow-listed emails get in.
+- **B — Header key (`X-API-Key`).** Simpler, but the connector dialog only offers
+  a **Request headers** field on accounts with that beta enabled.
+
+**Add the connector** in Claude → **Settings → Connectors → Add custom
+connector**:
    - **Name:** `ForPost`
    - **URL:** `https://forpost.poly-mind.net/mcp/`  *(keep the trailing slash)*
-   - **Advanced → Request headers:** name `X-API-Key`, value = your key
-   - **Save**
+   - **Path A (OAuth):** save, then click **Connect** → **Sign in with Google**
+     with an allow-listed account.
+   - **Path B (header):** **Advanced → Request headers** → name `X-API-Key`,
+     value = your key (`ssh root@<vps> "grep ^API_KEY= /opt/forpost/.env"`; never
+     paste it into a chat).
 
-3. **Use it.** Open a new chat, enable the ForPost connector, and ask e.g.
-   *"via ForPost, run `docker ps` in read-only"*.
+Then **use it**: open a new chat, enable the ForPost connector, and ask e.g.
+*"via ForPost, run `docker ps` in read-only"* or *"via ForPost, show
+diagnostics"*.
 
-4. **On your phone.** Nothing extra to do — connectors are **account-level**, so
-   once added from any device they appear in the Claude mobile app (iOS/Android)
-   automatically.
-
-> If the connector dialog has no **Request headers** section, header auth (a
-> beta feature) isn't enabled on your account yet — request access from
-> Anthropic, or front `/mcp` with a small OAuth shim.
+**On your phone:** nothing extra — connectors are **account-level**, so once
+added (and, for OAuth, signed in) they appear in the Claude mobile app
+automatically.
 
 ## Tools
 
@@ -77,7 +78,7 @@ Declared per call. They gate what a command is allowed to do:
 | Mode | Behavior |
 |------|----------|
 | `read-only` | Inspection only (`ls`, `cat`, `docker ps/logs`, `git status`, `df`, `ps`…). Write commands **and** shell metacharacters (`; \| & \` $ ( ) < >`, newlines) are rejected. |
-| `whitelist` | Only commands matching an entry in `whitelist.config` on the VPS; metacharacters likewise rejected. |
+| `whitelist` | Only commands matching an entry in `whitelist.config` on the VPS (e.g. `git pull`, `docker compose up`, `docker logs`, and read-only `gh pr list/view/diff`, `gh repo view`, `gh issue list/view`); metacharacters likewise rejected. |
 | `full-access` | Anything runs immediately, no gate. |
 
 `read-only` and `whitelist` are guardrails — **protection from self**, not a
@@ -127,22 +128,28 @@ mid-call, so following progress is by polling.
 
 ## Security & authentication
 
-Two independent layers:
+A request to `/mcp` (or any REST route except `GET /health`) is accepted if it
+satisfies **either** of two independent credentials — checked on **every**
+request before anything runs; miss both → `401`, nothing executes or logs:
 
-1. **ForPost's own auth.** A single static API key, sent as the `X-API-Key`
-   header, checked on **every** request (constant-time comparison) before
-   anything runs. Missing/invalid → `401`, nothing executes or logs. The only
-   unauthenticated route is `GET /health`. The key lives only in
-   `/opt/forpost/.env` on the VPS (`chmod 600`); generate it with
-   `openssl rand -hex 32`. No OAuth, no multi-user, no IP allowlist — the single
-   key is the whole boundary. If it leaks: edit `.env`, `docker compose up -d`.
+1. **Static API key.** Sent as the `X-API-Key` header, compared in constant time.
+   The key lives only in `/opt/forpost/.env` on the VPS (`chmod 600`); generate
+   it with `openssl rand -hex 32`. If it leaks: edit `.env`, `docker compose up
+   -d`. This is the whole boundary for the REST surface.
 
-2. **The Claude connector.** Requires HTTPS + Streamable-HTTP (both provided),
-   and passes the key via the `X-API-Key` request header (see Quick Start).
+2. **Google OIDC (optional, for the MCP connector).** Enabled with
+   `OAUTH_ENABLED=true`. `/mcp` then also accepts a Google **bearer** token whose
+   audience is `OAUTH_CLIENT_ID` and whose *verified* email is on
+   `OAUTH_ALLOWED_EMAILS` (exact addresses or a whole `@domain`). ForPost is only
+   a **resource server** — Google does the login; ForPost verifies the token
+   (via Google's `tokeninfo`, cached ~5 min) and matches the allow-list, so
+   arbitrary Google users can't get in. Discovery is standard RFC 9728: a `401`
+   carries `WWW-Authenticate`, and `/.well-known/oauth-protected-resource`
+   advertises the metadata. Turned off, ForPost stays key-only.
 
 Additional layers on the VPS: nginx `limit_req`/`limit_conn` (flood &
 brute-force protection, returns 429) and an app-level rate limit
-(`RATE_LIMIT_PER_MINUTE`, default 60) covering both REST and `/mcp`.
+(`RATE_LIMIT_PER_MINUTE`, default 120) covering both REST and `/mcp`.
 
 > **Security note.** ForPost mounts the host Docker socket and runs as a user in
 > the `docker` group — that's effectively root on the host. Combined with
@@ -165,6 +172,10 @@ Any MCP client can discover ForPost's capabilities over the wire:
 |----------|---------|---------|
 | `API_KEY` | — (required) | Auth key (`openssl rand -hex 32`). |
 | `GITHUB_TOKEN` | empty | Optional; only needed when `gh` is used inside the tunnel. |
+| `OAUTH_ENABLED` | `false` | Also accept a Google bearer on `/mcp` (resource-server verify + email allow-list). |
+| `OAUTH_CLIENT_ID` | empty | Google OAuth client ID a bearer's audience must match. |
+| `OAUTH_ALLOWED_EMAILS` | empty | Comma-separated allow-list: exact emails and/or `@domain`. |
+| `PUBLIC_URL` | `https://forpost.poly-mind.net` | External base, published in the OAuth metadata. |
 | `PORT` | 8000 | Container listen port. |
 | `RATE_LIMIT_PER_MINUTE` | 120 | App-level rate limit on actions (queries exempt). |
 | `MAX_TIMEOUT_SECONDS` | 1800 | Hard ceiling a per-call `timeout` is clamped to. |
@@ -172,6 +183,8 @@ Any MCP client can discover ForPost's capabilities over the wire:
 | `MAX_CONCURRENT_JOBS` | 5 | Max background jobs running at once. |
 | `MAX_JOB_LOG_BYTES` | 52428800 | Per-async-job log size cap on disk. |
 | `JOB_RETENTION_SECONDS` | 3600 | How long a finished job + its log is kept before reaping. |
+| `MAX_LOG_BYTES` | 10485760 | Per-file log budget; `commands.jsonl` over it drops its oldest lines, `app.log` rotates. |
+| `LOG_TRIM_FRACTION` | 0.2 | Fraction of oldest `commands.jsonl` lines dropped when over budget. |
 
 (`WORKSPACE_ROOT`, `LOGS_DIR`, `WHITELIST_PATH` are set by the container.)
 
@@ -238,9 +251,9 @@ fronts other live services.
 
 ## Out of scope (by design)
 
-No multi-user auth / OAuth, no orchestration dashboard, no automated
-rollback/snapshots, no database, no IP allowlist. A small personal tool, kept
-small on purpose.
+No multi-user accounts or roles (OAuth is just an email allow-list gating a
+single-user tool), no orchestration dashboard, no automated rollback/snapshots,
+no database, no IP allowlist. A small personal tool, kept small on purpose.
 
 ## License
 
