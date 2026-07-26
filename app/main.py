@@ -1,6 +1,7 @@
 """ForPost - main FastAPI application."""
 
 import json
+import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
@@ -20,6 +21,7 @@ from app.jobs import job_manager
 from app.logging_config import get_app_logger
 from app.mcp_server import mcp
 from app.modes import Mode
+from app.oauth import oauth_enabled, verify_bearer
 from app.rate_limit import rate_limiter
 
 # Streamable-HTTP ASGI app exposing the MCP tools (execute_command + file ops).
@@ -28,24 +30,29 @@ from app.rate_limit import rate_limiter
 mcp_app = mcp.streamable_http_app()
 
 
-async def _send_json_error(send, status: int, message: str) -> None:
+async def _send_json_error(send, status: int, message: str, extra_headers=None) -> None:
     body = json.dumps({"error": message}).encode()
-    await send({
-        "type": "http.response.start",
-        "status": status,
-        "headers": [(b"content-type", b"application/json")],
-    })
+    headers = [(b"content-type", b"application/json")]
+    if extra_headers:
+        headers.extend(extra_headers)
+    await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": body})
 
 
-class MCPApiKeyGuard:
-    """ASGI middleware guarding the mounted /mcp app with auth + rate limiting.
+def _www_authenticate_headers():
+    """On 401, point an MCP client at our protected-resource metadata (RFC 9728)
+    so it can discover the OAuth server. Only when OAuth is enabled."""
+    if not oauth_enabled():
+        return None
+    base = os.environ.get("PUBLIC_URL", "https://forpost.poly-mind.net").rstrip("/")
+    meta = f"{base}/.well-known/oauth-protected-resource"
+    return [(b"www-authenticate", f'Bearer resource_metadata="{meta}"'.encode())]
 
-    The FastAPI dependency (verify_api_key) and the /execute rate-limit only
-    cover the REST routes; the mounted MCP sub-app bypasses both, so without
-    this every MCP call (incl. protocol chatter, not just tool executions)
-    would be unauthenticated and unthrottled. This applies the same static-key
-    model and the same rate limiter to all of /mcp.
+
+class MCPApiKeyGuard:
+    """Guards the mounted /mcp app: accept a static X-API-Key OR (when OAuth is
+    enabled) a verified Google Bearer token, then rate-limit. The mounted MCP
+    sub-app bypasses the REST dependency + rate-limit, so this re-applies both.
     """
 
     def __init__(self, app):
@@ -54,14 +61,12 @@ class MCPApiKeyGuard:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             headers = dict(scope.get("headers") or [])
-            provided = headers.get(b"x-api-key", b"").decode()
-            try:
-                expected = get_api_key()
-            except RuntimeError:
-                expected = None
-            if not expected or not keys_match(provided, expected):
-                get_app_logger().warning("MCP request rejected: missing/invalid API key")
-                await _send_json_error(send, 401, "Missing or invalid API key")
+            if not await self._authenticated(headers):
+                get_app_logger().warning("MCP request rejected: missing/invalid credentials")
+                await _send_json_error(
+                    send, 401, "Missing or invalid credentials",
+                    extra_headers=_www_authenticate_headers(),
+                )
                 return
             try:
                 rate_limiter.check()
@@ -69,6 +74,26 @@ class MCPApiKeyGuard:
                 await _send_json_error(send, exc.status_code, str(exc.detail))
                 return
         await self.app(scope, receive, send)
+
+    @staticmethod
+    async def _authenticated(headers: dict) -> bool:
+        # 1) static X-API-Key - primary model (also used by REST/tests/curl).
+        provided = headers.get(b"x-api-key", b"").decode()
+        try:
+            expected = get_api_key()
+        except RuntimeError:
+            expected = None
+        if expected and keys_match(provided, expected):
+            return True
+        # 2) Google OAuth bearer, only when enabled. verify_bearer blocks on a
+        #    network call to Google, so run it off the event loop.
+        if oauth_enabled():
+            auth = headers.get(b"authorization", b"").decode()
+            if auth.lower().startswith("bearer "):
+                token = auth[7:].strip()
+                if await run_in_threadpool(verify_bearer, token):
+                    return True
+        return False
 
 
 @asynccontextmanager
@@ -83,7 +108,26 @@ async def lifespan(application: FastAPI):
 
 
 app = FastAPI(title="ForPost", version="0.1.0", lifespan=lifespan)
+# In OAuth mode the mounted MCP app enforces Google Bearer auth itself, so the
+# guard only rate-limits (path_auth=True). Otherwise it enforces X-API-Key.
 app.mount("/mcp", MCPApiKeyGuard(mcp_app))
+
+
+if oauth_enabled():
+    _RESOURCE = os.environ.get("PUBLIC_URL", "https://forpost.poly-mind.net").rstrip("/") + "/mcp"
+    _PR_METADATA = {
+        "resource": _RESOURCE,
+        "authorization_servers": ["https://accounts.google.com"],
+        "scopes_supported": ["openid", "email", "profile"],
+        "bearer_methods_supported": ["header"],
+    }
+
+    # RFC 9728 protected-resource metadata, served at the domain ROOT (where
+    # the 401 WWW-Authenticate points), advertising Google as the auth server.
+    @app.get("/.well-known/oauth-protected-resource/mcp")
+    @app.get("/.well-known/oauth-protected-resource")
+    async def oauth_protected_resource():
+        return _PR_METADATA
 
 logger = get_app_logger()
 

@@ -55,7 +55,7 @@ class TestMcpAuthGuard:
         client = TestClient(app, raise_server_exceptions=False)
         resp = client.post("/mcp/", json=INITIALIZE, headers=HEADERS)  # no key
         assert resp.status_code == 401
-        assert json.loads(resp.text) == {"error": "Missing or invalid API key"}
+        assert json.loads(resp.text) == {"error": "Missing or invalid credentials"}
 
     def test_mcp_initialize_with_key(self):
         # `with` runs the app lifespan so the MCP session manager is active.
