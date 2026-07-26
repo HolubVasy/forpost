@@ -239,3 +239,7 @@ fronts other live services.
 No multi-user auth / OAuth, no orchestration dashboard, no automated
 rollback/snapshots, no database, no IP allowlist. A small personal tool, kept
 small on purpose.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Vasili Holub.
