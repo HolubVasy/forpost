@@ -224,6 +224,13 @@ stdout/stderr was captured so far, plus `timed_out=true`.
 The command runs in a worker thread so a long command does not block the event
 loop (and `/health` stays responsive during it).
 
+Timing chain (deployed): the effective ceiling for a synchronous command is
+`min(app timeout, nginx proxy_read_timeout, connector timeout)`. nginx's default
+`proxy_read_timeout` is 60s, which would 504 a >1-minute command before the app
+finished - so the forpost vhost raises `proxy_read_timeout`/`proxy_send_timeout`
+to 1800s to match `MAX_TIMEOUT_SECONDS`. (Verified: a 65s command returns 200.)
+For anything genuinely long-running, use the async job tools instead.
+
 This stays synchronous - one request, one response. No request IDs, no
 polling, no separate kill endpoint. If something hangs, the timeout
 auto-kills it and Claude sees "timed out" in the response, then can

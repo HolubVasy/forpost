@@ -92,6 +92,8 @@ server {                                   # TLS termination + proxy
     location / {
         proxy_pass $forpost_upstream;      # variable -> nginx starts even if
         proxy_http_version 1.1;            #   forpost is down
+        proxy_read_timeout 1800s;          # match the app's max command timeout
+        proxy_send_timeout 1800s;          #   (nginx default 60s would 504 first)
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -119,6 +121,11 @@ Notes:
   client IP (zone defined at the top of the config), returning 429. This is
   the flood / key-brute-force layer and covers all paths including pre-auth,
   which the app-level rate limiter does not.
+- `proxy_read_timeout` / `proxy_send_timeout` are raised to **1800s** on the
+  forpost vhost to match the app's max command timeout. nginx's default is 60s,
+  which would return **504** on a synchronous command running longer than a
+  minute even though the app is still working. Verified: a 65s command returns
+  200 at ~65s. (For anything genuinely long, prefer the async job tools.)
 
 ## Logs
 
