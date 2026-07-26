@@ -60,6 +60,8 @@ class TestSchema:
             "run_async",
             "job_status",
             "job_kill",
+            "diagnostics",
+            "reset_jobs",
         }
 
     def test_execute_command_schema(self):

@@ -36,6 +36,16 @@ class TestIntegration:
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
 
+    def test_diagnostics_endpoint(self, client, setup_env):
+        response = client.get("/diagnostics", headers=HEADERS)
+        assert response.status_code == 200
+        data = response.json()
+        for key in ("ok", "checks", "memory", "jobs", "recent", "versions"):
+            assert key in data
+
+    def test_diagnostics_requires_key(self, client):
+        assert client.get("/diagnostics").status_code == 401
+
     def test_valid_read_only_command(self, client, setup_env):
         response = client.post(
             "/execute",

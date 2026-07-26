@@ -62,3 +62,20 @@ class TestJobsAndClamp:
         assert service.clamp_timeout(30) == 30
         assert service.clamp_timeout(0) == 1
         assert service.clamp_timeout(10_000_000) == 1800  # MAX_TIMEOUT_SECONDS
+
+
+class TestDiagnostics:
+    def test_snapshot_shape(self):
+        d = service.diagnostics()
+        assert isinstance(d["ok"], bool)
+        # workspace + logs point at the tmp dirs from the fixture -> writable
+        assert d["checks"]["workspace"]["ok"] is True
+        assert d["checks"]["logs"]["ok"] is True
+        for key in ("uptime_seconds", "memory", "jobs", "recent", "versions"):
+            assert key in d
+        assert d["jobs"]["running"] == 0 and d["jobs"]["zombies"] == 0
+        assert "commands" in d["recent"]
+
+    def test_reset_jobs_returns_cleared(self):
+        result = service.reset_jobs()
+        assert isinstance(result["cleared"], int)

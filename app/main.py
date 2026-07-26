@@ -100,6 +100,12 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/diagnostics")
+async def diagnostics_endpoint(api_key: str = Depends(verify_api_key)):
+    """Full health snapshot (authenticated). Same data as the MCP diagnostics tool."""
+    return await run_in_threadpool(service.diagnostics)
+
+
 class ExecuteRequest(BaseModel):
     command: str
     mode: Mode
@@ -250,3 +256,9 @@ async def job_kill_endpoint(
 ):
     # Killing a job is a safety action - never rate-limited.
     return await run_in_threadpool(service.kill_job, request.job_id)
+
+
+@app.post("/reset_jobs")
+async def reset_jobs_endpoint(api_key: str = Depends(verify_api_key)):
+    """Hard reset: kill all jobs + wipe all job state and logs."""
+    return await run_in_threadpool(service.reset_jobs)

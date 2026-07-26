@@ -144,6 +144,28 @@ class JobManager:
 
     # --- queries ---------------------------------------------------------
 
+    def running_count(self) -> int:
+        with self._lock:
+            return sum(1 for j in self._jobs.values() if j.status == "running")
+
+    def snapshot(self) -> dict:
+        """Counts by status + a zombie count (marked running but the process
+        actually died) - for the diagnostics 'alive / stuck' picture."""
+        with self._lock:
+            by_status: dict[str, int] = {}
+            zombies = 0
+            for jid, job in self._jobs.items():
+                by_status[job.status] = by_status.get(job.status, 0) + 1
+                proc = self._procs.get(jid)
+                if job.status == "running" and proc is not None and proc.poll() is not None:
+                    zombies += 1
+            return {
+                "total": len(self._jobs),
+                "running": by_status.get("running", 0),
+                "by_status": by_status,
+                "zombies": zombies,
+            }
+
     def status(self, job_id: str, offset: int = 0) -> dict:
         with self._lock:
             job = self._jobs.get(job_id)
@@ -214,7 +236,8 @@ class JobManager:
                 kill_process_tree(proc)
 
     def purge(self) -> int:
-        """Kill all running jobs and wipe all state + log files. Returns count."""
+        """Kill all running jobs and wipe ALL job state + log files (including
+        orphaned logs left on disk, e.g. after a restart). Returns count."""
         with self._lock:
             jobs = list(self._jobs.values())
             procs = list(self._procs.values())
@@ -223,11 +246,15 @@ class JobManager:
         for proc in procs:
             if proc.poll() is None:
                 kill_process_tree(proc)
-        for job in jobs:
-            try:
-                os.remove(job.log_path)
-            except OSError:
-                pass
+        # Sweep every job log file, not just the ones still tracked in memory.
+        try:
+            for f in _jobs_dir().glob("*.log"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
         return len(jobs)
 
 

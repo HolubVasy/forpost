@@ -63,6 +63,10 @@ FILES: write_file / read_file / delete_file move bytes within the workspace
 (text or base64). read is allowed in any mode; write and delete require
 full-access (whitelist must not be able to plant files).
 
+HEALTH: diagnostics() returns a one-call snapshot (alive?, memory, jobs
+running/stuck, versions, recent failures) - read it instead of digging through
+logs. reset_jobs() hard-resets stuck jobs (kill all + wipe job state/logs).
+
 LIMITS: output is capped (tail kept) to bound memory and context; every call is
 logged. Auth is a static X-API-Key header, configured once in the connector.
 
@@ -272,6 +276,46 @@ def job_kill(job_id: str) -> dict:
     return _call(service.kill_job, job_id)
 
 
+@mcp.tool(
+    title="Diagnostics / health snapshot",
+    annotations=ToolAnnotations(
+        title="Diagnostics / health snapshot",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+def diagnostics() -> dict:
+    """One-call health image - read this instead of digging through logs.
+
+    Returns: `ok` (alive & healthy), `uptime_seconds`, `checks`
+    (docker / workspace / logs writable), `memory` (process RSS + system
+    available/total), `jobs` (running / by-status / zombie count), `recent`
+    (last commands: how many failed + the last failure, and the last app
+    WARNING/ERROR), tool `versions`, and `commands_log_bytes`.
+    """
+    return service.diagnostics()
+
+
+@mcp.tool(
+    title="Hard reset (jobs)",
+    annotations=ToolAnnotations(
+        title="Hard reset (jobs)",
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+def reset_jobs() -> dict:
+    """Hard reset: kill ALL running background jobs and wipe all job state +
+    log files (including orphaned logs). Use when jobs are stuck. Returns
+    {cleared: N}. Only touches ForPost's own job registry, not the host.
+    """
+    return service.reset_jobs()
+
+
 @mcp.resource(
     "forpost://manual",
     name="ForPost manual",
@@ -317,6 +361,12 @@ Job state is in-memory (lost on server restart); output logs persist on disk.
 - `delete_file_tool(path, mode)` - full-access only.
 Paths are confined to the workspace (is_relative_to check); traversal and
 symlink escape are rejected.
+
+## Health
+- `diagnostics()` - one-call snapshot: `ok`, uptime, checks (docker/workspace/
+  logs), memory (process + system), jobs (running/stuck/zombies), recent
+  failures, tool versions. Read this instead of the logs. Also `GET /diagnostics`.
+- `reset_jobs()` - hard reset: kill all jobs + wipe all job state/logs.
 
 ## Auth & limits
 Static `X-API-Key` header (set once in the connector). Rate limited; every call

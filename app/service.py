@@ -8,17 +8,21 @@ Cross-cutting transport concerns (auth, rate limiting) stay in the transports;
 domain failures are raised as ForPostError and translated there.
 """
 
+import json
 import os
+import time
+from pathlib import Path
 
 from app.errors import ForPostError
 from app.executor import execute
-from app.file_ops import FileEncoding, delete_file, read_file, write_file
+from app.file_ops import FileEncoding, _get_workspace_root, delete_file, read_file, write_file
 from app.jobs import job_manager
 from app.logging_config import log_command, log_file_operation
 from app.modes import Mode, validate_command
 
 DEFAULT_TIMEOUT = 300
 DEFAULT_JOB_TIMEOUT = 1800
+_STARTED = time.time()
 
 
 def clamp_timeout(requested: int) -> int:
@@ -106,3 +110,151 @@ def delete(path: str, mode: Mode) -> dict:
     result = delete_file(path)
     log_file_operation("delete_file", result["path"], mode.value)
     return result
+
+
+def reset_jobs() -> dict:
+    """Hard reset: kill all running jobs and wipe all job state + log files.
+    Only touches ForPost's own job registry, not the host."""
+    return {"cleared": job_manager.purge()}
+
+
+def _writable(path: Path) -> dict:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".forpost_write_probe"
+        probe.write_text("ok")
+        probe.unlink()
+        return {"ok": True, "path": str(path)}
+    except OSError as exc:
+        return {"ok": False, "path": str(path), "detail": str(exc)}
+
+
+def _process_rss_mb():
+    """Resident memory of this process, MB - to spot a leak/bloat."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return round(int(line.split()[1]) / 1024, 1)
+    except OSError:
+        pass
+    try:
+        import resource  # Unix; ru_maxrss is KB on Linux
+
+        return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+    except Exception:
+        return None
+
+
+def _system_mem():
+    """System memory (available/total, MB) - is the box out of memory?"""
+    try:
+        info = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                key, _, rest = line.partition(":")
+                info[key.strip()] = rest.strip()
+
+        def mb(key):
+            parts = info.get(key, "").split()
+            return round(int(parts[0]) / 1024, 1) if parts else None
+
+        return {"available_mb": mb("MemAvailable"), "total_mb": mb("MemTotal")}
+    except OSError:
+        return {"available_mb": None, "total_mb": None}
+
+
+def _tail_lines(path: Path, max_lines: int = 50, max_bytes: int = 65536) -> list:
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            f.seek(max(0, size - max_bytes))
+            data = f.read()
+        return data.decode("utf-8", errors="replace").splitlines()[-max_lines:]
+    except OSError:
+        return []
+
+
+def _recent_commands(logs_dir: Path) -> dict:
+    """Summarise the last commands so you don't have to open the log."""
+    scanned = 0
+    failures = 0
+    last_failure = None
+    for line in _tail_lines(logs_dir / "commands.jsonl", 50):
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        scanned += 1
+        code = entry.get("exit_code")
+        if code not in (0, None):
+            failures += 1
+            last_failure = {
+                "command": entry.get("command"),
+                "exit_code": code,
+                "timestamp": entry.get("timestamp"),
+            }
+    return {"scanned": scanned, "failures": failures, "last_failure": last_failure}
+
+
+def _last_app_issue(logs_dir: Path):
+    for line in reversed(_tail_lines(logs_dir / "app.log", 100)):
+        if "WARNING" in line or "ERROR" in line:
+            return line[:200]
+    return None
+
+
+def diagnostics() -> dict:
+    """One-call health snapshot: alive?, memory, jobs (running / stuck), disk,
+    tool versions, recent failures. A fixed, safe set of probes - no mode/
+    arbitrary command. Read this instead of digging through the logs."""
+    checks = {}
+    dv = execute("docker version", timeout=10)
+    detail = (dv.stdout or dv.stderr).strip()
+    checks["docker"] = {
+        "ok": dv.exit_code == 0,
+        "detail": detail.splitlines()[0][:200] if detail else "",
+    }
+    checks["workspace"] = _writable(_get_workspace_root())
+    checks["logs"] = _writable(Path(os.environ.get("LOGS_DIR", "logs")))
+
+    versions = {}
+    for name, cmd in (
+        ("git", "git --version"),
+        ("gh", "gh --version"),
+        ("docker", "docker --version"),
+        ("python", "python3 --version"),
+    ):
+        r = execute(cmd, timeout=10)
+        versions[name] = (
+            r.stdout.strip().splitlines()[0]
+            if (r.exit_code == 0 and r.stdout.strip())
+            else None
+        )
+
+    logs_dir = Path(os.environ.get("LOGS_DIR", "logs"))
+    try:
+        cj = logs_dir / "commands.jsonl"
+        commands_log_bytes = cj.stat().st_size if cj.exists() else 0
+    except OSError:
+        commands_log_bytes = 0
+
+    jobs = job_manager.snapshot()
+    healthy = all(c["ok"] for c in checks.values()) and jobs["zombies"] == 0
+
+    return {
+        "ok": healthy,
+        "uptime_seconds": round(time.time() - _STARTED, 1),
+        "checks": checks,
+        "memory": {
+            "process_rss_mb": _process_rss_mb(),
+            "system": _system_mem(),
+        },
+        "jobs": jobs,
+        "recent": {
+            "commands": _recent_commands(logs_dir),
+            "last_app_issue": _last_app_issue(logs_dir),
+        },
+        "versions": versions,
+        "commands_log_bytes": commands_log_bytes,
+    }

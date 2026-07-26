@@ -55,7 +55,7 @@ all reasoning stays on Claude's side.
 
 ## Tools
 
-Seven tools, exposed both as MCP tools (for the connector) and as REST endpoints
+Nine tools, exposed both as MCP tools (for the connector) and as REST endpoints
 (for scripts/tests). They share the exact same logic.
 
 | Tool | Purpose |
@@ -67,6 +67,8 @@ Seven tools, exposed both as MCP tools (for the connector) and as REST endpoints
 | `write_file_tool(path, content, mode, encoding?)` | Write a file in the workspace (`text` or `base64`). **full-access only.** |
 | `read_file_tool(path, mode, encoding?, offset?, length?)` | Read a bounded slice of a file (any mode); paginate big files via `offset`/`next_offset`. |
 | `delete_file_tool(path, mode)` | Delete a file. **full-access only.** |
+| `diagnostics()` | One-call health snapshot: alive?, memory, jobs (running/stuck), tool versions, recent failures. Also `GET /diagnostics`. |
+| `reset_jobs()` | Hard reset: kill all jobs + wipe all job state/logs. Also `POST /reset_jobs`. |
 
 ## Modes
 
