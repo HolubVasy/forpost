@@ -79,8 +79,10 @@ def kill_job(job_id: str) -> dict:
 
 
 def write(path: str, content: str, encoding: FileEncoding, mode: Mode) -> dict:
-    if mode == Mode.READ_ONLY:
-        raise ForPostError(403, "write_file not allowed in read-only mode")
+    # full-access only: allowing writes in whitelist mode + a whitelisted
+    # `docker compose up` would let a crafted compose file escalate to the host.
+    if mode != Mode.FULL_ACCESS:
+        raise ForPostError(403, "write_file requires full-access mode")
     result = write_file(path, content, encoding)
     log_file_operation("write_file", result["path"], mode.value, result["size"])
     return result
@@ -99,8 +101,8 @@ def read(
 
 
 def delete(path: str, mode: Mode) -> dict:
-    if mode == Mode.READ_ONLY:
-        raise ForPostError(403, "delete_file not allowed in read-only mode")
+    if mode != Mode.FULL_ACCESS:
+        raise ForPostError(403, "delete_file requires full-access mode")
     result = delete_file(path)
     log_file_operation("delete_file", result["path"], mode.value)
     return result

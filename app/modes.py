@@ -17,13 +17,13 @@ ALLOWED_READ_PREFIXES = (
     "cat ",
     "df ",
     "df",
-    "docker inspect",
     "docker logs",
     "docker ps",
     "echo ",
-    "env",
-    # NOTE: `find` is intentionally NOT here - `find . -delete` / `-exec rm`
-    # would make read-only destructive. Use full-access for find-with-actions.
+    # NOTE: `docker inspect` and `env` are intentionally NOT here - they leak
+    # secrets (neighbouring containers' env, this app's own env). `find` is
+    # excluded too (`find -delete`/`-exec rm` would make read-only destructive).
+    # Use full-access for any of these.
     "git branch",
     "git diff",
     "git log",
@@ -57,6 +57,16 @@ _SHELL_METACHARS = frozenset(";|&`$()<>\n\r")
 
 def _has_shell_metachars(command: str) -> bool:
     return any(ch in _SHELL_METACHARS for ch in command)
+
+
+def _prefix_allowed(command: str, prefixes) -> bool:
+    """Match on a TOKEN boundary, not a bare string prefix, so `ps` does not
+    allow `psql` and `ls` does not allow `lsof`."""
+    for prefix in prefixes:
+        p = prefix.rstrip()
+        if command == p or command.startswith(p + " "):
+            return True
+    return False
 
 
 def _load_whitelist() -> list[str]:
@@ -94,18 +104,16 @@ def validate_command(command: str, mode: Mode) -> tuple[bool, str]:
         )
 
     if mode == Mode.READ_ONLY:
-        for prefix in ALLOWED_READ_PREFIXES:
-            if command == prefix or command.startswith(prefix):
-                return True, ""
+        if _prefix_allowed(command, ALLOWED_READ_PREFIXES):
+            return True, ""
         return False, f"Command not allowed in read-only mode: {command.split()[0]}"
 
     if mode == Mode.WHITELIST:
         whitelist = _load_whitelist()
         if not whitelist:
             return False, "Whitelist is empty or missing - fail closed"
-        for prefix in whitelist:
-            if command == prefix or command.startswith(prefix):
-                return True, ""
+        if _prefix_allowed(command, whitelist):
+            return True, ""
         return False, f"Command not in whitelist: {command.split()[0]}"
 
     return False, f"Unknown mode: {mode}"

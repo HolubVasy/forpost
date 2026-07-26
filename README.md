@@ -64,9 +64,9 @@ Seven tools, exposed both as MCP tools (for the connector) and as REST endpoints
 | `run_async(command, mode, timeout?)` | Start a long command in the background → returns a `job_id` immediately. |
 | `job_status(job_id, offset?)` | Poll a job: status, exit_code, and new output from `offset` (follow progress + paginate). |
 | `job_kill(job_id)` | Terminate a running job. |
-| `write_file_tool(path, content, mode, encoding?)` | Write a file in the workspace (`text` or `base64`). |
-| `read_file_tool(path, mode, encoding?, offset?, length?)` | Read a bounded slice of a file (allowed in every mode); paginate big files via `offset`/`next_offset`. |
-| `delete_file_tool(path, mode)` | Delete a file. |
+| `write_file_tool(path, content, mode, encoding?)` | Write a file in the workspace (`text` or `base64`). **full-access only.** |
+| `read_file_tool(path, mode, encoding?, offset?, length?)` | Read a bounded slice of a file (any mode); paginate big files via `offset`/`next_offset`. |
+| `delete_file_tool(path, mode)` | Delete a file. **full-access only.** |
 
 ## Modes
 
@@ -79,8 +79,19 @@ Declared per call. They gate what a command is allowed to do:
 | `full-access` | Anything runs immediately, no gate. |
 
 `read-only` and `whitelist` are guardrails — **protection from self**, not a
-sandbox. They stop chaining a second command in (`ls; rm -rf`), but they do
-**not** neuter an allowed command's own dangerous flags (e.g. `find -delete`).
+sandbox. They stop chaining a second command in (`ls; rm -rf`), reject secret
+readers (`env`, `docker inspect`) and match on token boundaries (so `ps` does
+not allow `psql`). But they do **not** neuter an allowed command's own dangerous
+flags. Notes:
+
+- **File writes/deletes require `full-access`** (a `whitelist` write + a
+  whitelisted `docker compose up` could otherwise plant a malicious compose and
+  escalate to the host). `read_file` is allowed in any mode.
+- Executed commands run with the `API_KEY` **stripped** from their environment,
+  so a command can't print the auth key. (`GITHUB_TOKEN` is kept for `gh`/`git`.
+  Residual: `cat /proc/1/environ` of the app process can still see it — a
+  narrower vector, closed only by removing it from the app env; not done yet.)
+
 Use `full-access` consciously when you actually need pipes or chaining. All
 three modes are fully logged.
 
@@ -153,10 +164,12 @@ Any MCP client can discover ForPost's capabilities over the wire:
 | `API_KEY` | — (required) | Auth key (`openssl rand -hex 32`). |
 | `GITHUB_TOKEN` | empty | Optional; only needed when `gh` is used inside the tunnel. |
 | `PORT` | 8000 | Container listen port. |
-| `RATE_LIMIT_PER_MINUTE` | 60 | App-level rate limit (runaway-loop guard). |
+| `RATE_LIMIT_PER_MINUTE` | 120 | App-level rate limit on actions (queries exempt). |
 | `MAX_TIMEOUT_SECONDS` | 1800 | Hard ceiling a per-call `timeout` is clamped to. |
-| `MAX_OUTPUT_CHARS` | 100000 | Cap on returned/logged output (tail kept). |
+| `MAX_OUTPUT_CHARS` | 100000 | Cap on returned/logged output and a `read_file` slice. |
+| `MAX_CONCURRENT_JOBS` | 5 | Max background jobs running at once. |
 | `MAX_JOB_LOG_BYTES` | 52428800 | Per-async-job log size cap on disk. |
+| `JOB_RETENTION_SECONDS` | 3600 | How long a finished job + its log is kept before reaping. |
 
 (`WORKSPACE_ROOT`, `LOGS_DIR`, `WHITELIST_PATH` are set by the container.)
 

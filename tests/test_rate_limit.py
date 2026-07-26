@@ -76,9 +76,9 @@ class TestRateLimit:
         )
         assert resp.status_code == 200
 
-    def test_default_limit_is_60(self, monkeypatch):
+    def test_default_limit_is_120(self, monkeypatch):
         monkeypatch.delenv("RATE_LIMIT_PER_MINUTE", raising=False)
-        assert rate_limiter.limit == 60
+        assert rate_limiter.limit == 120
 
     def test_thread_safe_under_concurrency(self, monkeypatch):
         """check() is called from worker threads; the lock must keep the count

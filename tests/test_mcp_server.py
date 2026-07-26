@@ -195,15 +195,15 @@ class TestFileTools:
         )
         assert base64.b64decode(read["content"]) == raw
 
-    def test_write_rejected_in_read_only(self, setup_env):
-        with pytest.raises(ToolError, match="not allowed in read-only mode"):
+    def test_write_requires_full_access(self, setup_env):
+        with pytest.raises(ToolError, match="full-access"):
             call(
                 "write_file_tool",
-                {"path": "x.txt", "content": "no", "mode": "read-only"},
+                {"path": "x.txt", "content": "no", "mode": "whitelist"},
             )
 
-    def test_delete_rejected_in_read_only(self, setup_env):
-        with pytest.raises(ToolError, match="not allowed in read-only mode"):
+    def test_delete_requires_full_access(self, setup_env):
+        with pytest.raises(ToolError, match="full-access"):
             call("delete_file_tool", {"path": "x.txt", "mode": "read-only"})
 
     def test_read_missing_file_errors(self, setup_env):

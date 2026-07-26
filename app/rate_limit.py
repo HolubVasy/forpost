@@ -21,7 +21,8 @@ class RateLimiter:
 
     @property
     def limit(self) -> int:
-        return int(os.environ.get("RATE_LIMIT_PER_MINUTE", "60"))
+        # Headroom for active job polling; nginx limit_req is the real flood gate.
+        return int(os.environ.get("RATE_LIMIT_PER_MINUTE", "120"))
 
     def check(self) -> None:
         """Raise 429 if rate limit exceeded, otherwise record the request."""

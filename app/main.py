@@ -16,6 +16,7 @@ from app import service
 from app.auth import get_api_key, keys_match, verify_api_key
 from app.errors import ForPostError
 from app.file_ops import FileEncoding
+from app.jobs import job_manager
 from app.logging_config import get_app_logger
 from app.mcp_server import mcp
 from app.modes import Mode
@@ -76,6 +77,9 @@ async def lifespan(application: FastAPI):
     # The MCP session manager must run for the streamable-HTTP endpoint to work.
     async with mcp.session_manager.run():
         yield
+    # Kill any still-running background jobs on shutdown (clean slate on restart).
+    job_manager.shutdown()
+    get_app_logger().info("ForPost stopped")
 
 
 app = FastAPI(title="ForPost", version="0.1.0", lifespan=lifespan)
@@ -179,7 +183,7 @@ async def read_file_endpoint(
     request: ReadFileRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    rate_limiter.check()
+    # read is a bounded query - exempt from the app rate limit (nginx still caps).
     return await run_in_threadpool(
         service.read,
         request.path,
@@ -233,7 +237,7 @@ async def job_status_endpoint(
     request: JobStatusRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    rate_limiter.check()
+    # Polling a job must not be rate-limited (it would block job_kill).
     return await run_in_threadpool(
         service.get_job_status, request.job_id, request.offset
     )
@@ -244,5 +248,5 @@ async def job_kill_endpoint(
     request: JobKillRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    rate_limiter.check()
+    # Killing a job is a safety action - never rate-limited.
     return await run_in_threadpool(service.kill_job, request.job_id)

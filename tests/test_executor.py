@@ -62,6 +62,20 @@ class TestExecutor:
         assert len(result.stdout) < 200  # capped well below the 500 produced
         assert "truncated" in result.stdout
 
+    def test_child_env_strips_api_key(self, monkeypatch):
+        from app.executor import child_env
+
+        monkeypatch.setenv("API_KEY", "supersecret")
+        monkeypatch.setenv("GITHUB_TOKEN", "ghtok")
+        env = child_env()
+        assert "API_KEY" not in env  # auth key must not leak to commands
+        assert env.get("GITHUB_TOKEN") == "ghtok"  # gh/git still work
+
+    def test_executed_command_cannot_read_api_key(self, monkeypatch):
+        monkeypatch.setenv("API_KEY", "supersecret")
+        result = execute(f"{PY} -c \"import os; print(os.environ.get('API_KEY'))\"")
+        assert "supersecret" not in result.stdout
+
     def test_large_output_is_memory_bounded(self):
         # ~2 MB of output; default cap 100k -> result stays small, tail kept,
         # and the process must not blow up memory or error.

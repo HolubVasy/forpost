@@ -60,7 +60,8 @@ SYNC vs ASYNC:
   paginates); job_kill stops it.
 
 FILES: write_file / read_file / delete_file move bytes within the workspace
-(text or base64), subject to the same mode rules (read-only can only read).
+(text or base64). read is allowed in any mode; write and delete require
+full-access (whitelist must not be able to plant files).
 
 LIMITS: output is capped (tail kept) to bound memory and context; every call is
 logged. Auth is a static X-API-Key header, configured once in the connector.
@@ -135,7 +136,7 @@ def write_file_tool(
     Args:
         path: Destination path (relative to the workspace root).
         content: File content. Plain text, or base64 when encoding="base64".
-        mode: Request mode. Rejected in "read-only".
+        mode: Must be "full-access" (writes are gated to avoid escalation).
         encoding: "text" (default) or "base64" for binary files.
 
     Returns the resolved path and byte size written.
@@ -193,7 +194,7 @@ def delete_file_tool(path: str, mode: Mode) -> dict:
 
     Args:
         path: Path to delete (relative to the workspace root).
-        mode: Request mode. Rejected in "read-only".
+        mode: Must be "full-access" (deletes are gated).
 
     Returns the resolved path deleted.
     """
@@ -308,12 +309,12 @@ output returns with `timed_out=true`. Output is capped (tail kept).
 - `job_kill(job_id)` -> stops it.
 Job state is in-memory (lost on server restart); output logs persist on disk.
 
-## Files - within the workspace, subject to mode rules
-- `write_file_tool(path, content, mode, encoding="text"|"base64")`
-- `read_file_tool(path, mode, encoding, offset=0, length=None)` (all modes).
+## Files - within the workspace
+- `write_file_tool(path, content, mode, encoding="text"|"base64")` - full-access only.
+- `read_file_tool(path, mode, encoding, offset=0, length=None)` - any mode.
   Reads are bounded (default = the output cap); paginate a big file by passing
   the previous `next_offset`.
-- `delete_file_tool(path, mode)`
+- `delete_file_tool(path, mode)` - full-access only.
 Paths are confined to the workspace (is_relative_to check); traversal and
 symlink escape are rejected.
 

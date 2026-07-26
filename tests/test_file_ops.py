@@ -76,15 +76,18 @@ class TestWriteFile:
             headers=HEADERS,
         )
         assert resp.status_code == 403
-        assert "read-only" in resp.json()["detail"]
+        assert "full-access" in resp.json()["detail"]
 
-    def test_write_allowed_in_whitelist_mode(self, client, setup_env):
+    def test_write_requires_full_access(self, client, setup_env):
+        # whitelist must NOT allow writes (a crafted compose + whitelisted
+        # `docker compose up` would otherwise escalate to the host).
         resp = client.post(
             "/write_file",
             json={"path": "ok.txt", "content": "whitelist write", "mode": "whitelist"},
             headers=HEADERS,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 403
+        assert "full-access" in resp.json()["detail"]
 
     def test_write_path_traversal_blocked(self, client, setup_env):
         resp = client.post(

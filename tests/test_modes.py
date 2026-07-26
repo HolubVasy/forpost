@@ -155,6 +155,27 @@ class TestShellInjectionBlocked:
         assert reason == ""
 
 
+class TestPrefixBoundary:
+    """Prefix match must respect token boundaries and not expose secret readers."""
+
+    @pytest.mark.parametrize("cmd", [
+        "psql -c 'select 1'",   # ps -> psql
+        "lsof",                 # ls -> lsof
+        "lshw",                 # ls -> lshw
+        "identify x",           # id -> identify
+        "envsubst < t",         # env removed anyway, but also a lookalike
+    ])
+    def test_prefix_lookalikes_rejected(self, cmd):
+        allowed, _ = validate_command(cmd, Mode.READ_ONLY)
+        assert not allowed, f"read-only must reject lookalike '{cmd}'"
+
+    @pytest.mark.parametrize("cmd", ["env", "docker inspect LibreChat"])
+    def test_secret_readers_rejected(self, cmd):
+        # These leak secrets (own env / neighbouring containers' env).
+        allowed, _ = validate_command(cmd, Mode.READ_ONLY)
+        assert not allowed
+
+
 class TestEdgeCases:
     """Edge cases and invalid inputs."""
 

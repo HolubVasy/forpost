@@ -1,19 +1,23 @@
 """Background job execution for long-running commands (the async model).
 
-`execute()` is synchronous - one request, one response, bounded by a timeout.
-For tasks that outlive a single request (e.g. `docker build`), run them as a
-background job instead:
+Minimal by design: hand the command to the shell, don't let it hang, be able
+to kill it, and don't let parallel jobs trip over shared state or pile up.
 
-  - `start(command, timeout)` spawns the process and returns a job_id at once.
-  - `status(job_id, offset)` returns the output produced so far from `offset`
-    onward - poll it to *follow progress*, and use `offset`/`next_offset` to
-    paginate. Reports status + exit_code when finished.
-  - `kill(job_id)` terminates a running job.
+  - `start(command, timeout)` spawns the process (own process-group, own log
+    file) and returns a job_id at once.
+  - `status(job_id, offset)` returns output from `offset` onward - poll to
+    follow progress / paginate; reports status + exit_code when finished.
+  - `kill(job_id)` force-kills the whole process group.
 
-The child writes stdout+stderr straight to a per-job log file (its own fd), so
-job output never buffers in ForPost's memory. Disk per job is capped at
-MAX_JOB_LOG_BYTES; the timeout bounds wall-clock time. Job state is in-memory
-and does not survive a container restart (the log files do).
+Lifecycle / cleanup (so nothing dangles):
+  - concurrency is capped (MAX_CONCURRENT_JOBS) so jobs can't pile up;
+  - finished jobs (and their log files) are reaped after JOB_RETENTION_SECONDS;
+  - `shutdown()` kills everything still running (a container restart = clean
+    slate); `purge()` is the explicit "kill all + wipe state + delete logs".
+
+The child writes straight to its log file (own fd), so job output never buffers
+in memory. Per-job disk is capped at MAX_JOB_LOG_BYTES; job state is in-memory
+and does not survive a restart (the log files may, until reaped).
 """
 
 import os
@@ -24,7 +28,10 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.executor import kill_process_tree, _NEW_SESSION
+from app.errors import ForPostError
+from app.executor import _NEW_SESSION, child_env, kill_process_tree
+
+_TERMINAL = {"done", "timeout", "killed", "error"}
 
 
 def _jobs_dir() -> Path:
@@ -41,6 +48,14 @@ def _status_chunk_limit() -> int:
     return int(os.environ.get("MAX_OUTPUT_CHARS", "100000"))
 
 
+def _max_concurrent() -> int:
+    return int(os.environ.get("MAX_CONCURRENT_JOBS", "5"))
+
+
+def _retention_seconds() -> int:
+    return int(os.environ.get("JOB_RETENTION_SECONDS", "3600"))
+
+
 @dataclass
 class Job:
     id: str
@@ -49,6 +64,7 @@ class Job:
     status: str = "running"  # running | done | timeout | killed | error
     exit_code: int | None = None
     truncated: bool = False
+    finished_at: float | None = None
 
 
 class JobManager:
@@ -57,7 +73,17 @@ class JobManager:
         self._procs: dict[str, subprocess.Popen] = {}
         self._lock = threading.Lock()
 
+    # --- lifecycle -------------------------------------------------------
+
     def start(self, command: str, timeout: int) -> str:
+        with self._lock:
+            self._reap_locked(time.time())
+            running = sum(1 for j in self._jobs.values() if j.status == "running")
+            if running >= _max_concurrent():
+                raise ForPostError(
+                    503, f"too many concurrent jobs (max {_max_concurrent()})"
+                )
+
         job_id = uuid.uuid4().hex[:16]
         log_path = _jobs_dir() / f"{job_id}.log"
         job = Job(id=job_id, command=command, log_path=str(log_path))
@@ -68,6 +94,7 @@ class JobManager:
             stdout=logf,
             stderr=subprocess.STDOUT,
             start_new_session=_NEW_SESSION,
+            env=child_env(),
         )
         with self._lock:
             self._jobs[job_id] = job
@@ -77,6 +104,11 @@ class JobManager:
         ).start()
         return job_id
 
+    def _finalize(self, job: Job, status: str, exit_code: int | None) -> None:
+        job.status = status
+        job.exit_code = exit_code
+        job.finished_at = time.time()
+
     def _supervise(self, job: Job, proc: subprocess.Popen, logf, timeout: int) -> None:
         deadline = time.time() + timeout if timeout else None
         cap = _max_job_log_bytes()
@@ -84,35 +116,33 @@ class JobManager:
             while True:
                 try:
                     proc.wait(timeout=1)
-                    break  # process finished (naturally or via kill)
+                    break  # finished (naturally or via kill)
                 except subprocess.TimeoutExpired:
                     if deadline and time.time() > deadline:
                         kill_process_tree(proc)
                         proc.wait()
-                        job.status = "timeout"
-                        job.exit_code = -1
+                        self._finalize(job, "timeout", -1)
                         return
                     try:
                         if os.path.getsize(job.log_path) > cap:
                             kill_process_tree(proc)
                             proc.wait()
                             job.truncated = True
-                            job.status = "killed"
-                            job.exit_code = -1
+                            self._finalize(job, "killed", -1)
                             return
                     except OSError:
                         pass
-            # Finished. If kill() already marked it, leave that status.
-            if job.status == "running":
-                job.exit_code = proc.returncode
-                job.status = "done"
+            if job.status == "running":  # not already killed
+                self._finalize(job, "done", proc.returncode)
         except Exception:  # pragma: no cover - defensive
-            job.status = "error"
+            self._finalize(job, "error", None)
         finally:
             try:
                 logf.close()
             except Exception:
                 pass
+
+    # --- queries ---------------------------------------------------------
 
     def status(self, job_id: str, offset: int = 0) -> dict:
         with self._lock:
@@ -148,10 +178,57 @@ class JobManager:
         if job is None:
             raise KeyError(job_id)
         if proc is not None and proc.poll() is None:
-            job.status = "killed"
-            job.exit_code = -1
             kill_process_tree(proc)
+            self._finalize(job, "killed", -1)
         return {"job_id": job_id, "status": job.status}
+
+    # --- cleanup ---------------------------------------------------------
+
+    def _reap_locked(self, now: float) -> None:
+        """Drop finished jobs (and their logs) older than the retention window.
+        Caller must hold the lock."""
+        retention = _retention_seconds()
+        stale = [
+            jid
+            for jid, j in self._jobs.items()
+            if j.finished_at is not None and now - j.finished_at > retention
+        ]
+        for jid in stale:
+            job = self._jobs.pop(jid, None)
+            self._procs.pop(jid, None)
+            if job:
+                try:
+                    os.remove(job.log_path)
+                except OSError:
+                    pass
+
+    def shutdown(self) -> None:
+        """Kill every still-running job (called on app shutdown)."""
+        with self._lock:
+            procs = list(self._procs.values())
+            for job in self._jobs.values():
+                if job.status == "running":
+                    job.status = "killed"
+        for proc in procs:
+            if proc.poll() is None:
+                kill_process_tree(proc)
+
+    def purge(self) -> int:
+        """Kill all running jobs and wipe all state + log files. Returns count."""
+        with self._lock:
+            jobs = list(self._jobs.values())
+            procs = list(self._procs.values())
+            self._jobs.clear()
+            self._procs.clear()
+        for proc in procs:
+            if proc.poll() is None:
+                kill_process_tree(proc)
+        for job in jobs:
+            try:
+                os.remove(job.log_path)
+            except OSError:
+                pass
+        return len(jobs)
 
 
 job_manager = JobManager()

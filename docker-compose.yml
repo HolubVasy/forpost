@@ -14,8 +14,11 @@ services:
     restart: unless-stopped
     env_file:
       - .env
+    # Bind to loopback only - the service is meant to sit behind a reverse
+    # proxy, not be exposed on all interfaces. (The VPS deployment publishes
+    # no host port at all and reaches it over the proxy's docker network.)
     ports:
-      - "${PORT:-8000}:8000"
+      - "127.0.0.1:${PORT:-8000}:8000"
     volumes:
       # Host docker socket - lets ForPost manage other containers (Linux VPS).
       - /var/run/docker.sock:/var/run/docker.sock

@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from app.errors import ForPostError
 from app.jobs import JobManager
 
 PY = f'"{sys.executable}"'
@@ -69,3 +70,40 @@ class TestJobs:
             mgr.status("nope")
         with pytest.raises(KeyError):
             mgr.kill("nope")
+
+
+class TestJobLifecycle:
+    def test_concurrency_cap(self, monkeypatch):
+        monkeypatch.setenv("MAX_CONCURRENT_JOBS", "1")
+        mgr = JobManager()
+        j1 = mgr.start(f'{PY} -c "import time; time.sleep(5)"', timeout=30)
+        with pytest.raises(ForPostError) as e:
+            mgr.start(f"{PY} -c \"print(1)\"", timeout=30)
+        assert e.value.status_code == 503
+        mgr.kill(j1)
+
+    def test_reap_removes_finished(self, monkeypatch):
+        monkeypatch.setenv("JOB_RETENTION_SECONDS", "0")
+        mgr = JobManager()
+        j = mgr.start(f"{PY} -c \"print('x')\"", timeout=30)
+        _wait_done(mgr, j)
+        time.sleep(0.05)
+        # starting another reaps the finished one (retention 0)
+        mgr.start(f"{PY} -c \"print('y')\"", timeout=30)
+        with pytest.raises(KeyError):
+            mgr.status(j)
+
+    def test_purge_kills_and_wipes(self):
+        mgr = JobManager()
+        j = mgr.start(f'{PY} -c "import time; time.sleep(5)"', timeout=30)
+        count = mgr.purge()
+        assert count >= 1
+        with pytest.raises(KeyError):
+            mgr.status(j)
+
+    def test_shutdown_kills_running(self):
+        mgr = JobManager()
+        j = mgr.start(f'{PY} -c "import time; time.sleep(5)"', timeout=30)
+        mgr.shutdown()
+        st = mgr.status(j)
+        assert st["status"] == "killed"

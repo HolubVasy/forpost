@@ -21,6 +21,17 @@ READ_CHUNK = 65536
 _NEW_SESSION = os.name == "posix"
 
 
+# Secrets that must never leak into an executed command's environment.
+# (API_KEY is the whole auth boundary; a read-only `env`/`cat /proc/self/environ`
+# must not reveal it.) GITHUB_TOKEN is kept - `gh`/`git` children need it.
+_STRIPPED_ENV_KEYS = frozenset({"API_KEY"})
+
+
+def child_env() -> dict:
+    """os.environ for child commands, with secret keys removed."""
+    return {k: v for k, v in os.environ.items() if k not in _STRIPPED_ENV_KEYS}
+
+
 def kill_process_tree(proc: "subprocess.Popen") -> None:
     """Kill a command's whole process group (POSIX) or the process (Windows)."""
     try:
@@ -94,6 +105,7 @@ def execute(command: str, timeout: int | None = None) -> CommandResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         start_new_session=_NEW_SESSION,
+        env=child_env(),
     )
     out_reader = _CappedReader(proc.stdout, cap)
     err_reader = _CappedReader(proc.stderr, cap)
