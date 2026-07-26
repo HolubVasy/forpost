@@ -73,4 +73,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD curl -fsS http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --forwarded-allow-ips=* : trust X-Forwarded-Proto/For from the reverse proxy
+# (only nginx reaches this container) so generated URLs/redirects use https,
+# not http. --proxy-headers is on by default but stated for clarity.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--proxy-headers", "--forwarded-allow-ips", "*"]
