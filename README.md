@@ -154,7 +154,9 @@ brute-force protection, returns 429) and an app-level rate limit
 > **Security note.** ForPost mounts the host Docker socket and runs as a user in
 > the `docker` group — that's effectively root on the host. Combined with
 > `full-access`, a leaked key means full host compromise. This is intentional
-> for a single-user tool; keep the key secret and rotate on any suspicion.
+> for a single-user tool; keep the key secret, rotate it **at least once a year**
+> as routine hygiene, and immediately on any suspicion. (Key rotation is separate
+> from the automatic, file-based log rotation.)
 
 ## Self-describing MCP
 

@@ -95,7 +95,9 @@ One tool: `execute_command`
 
 - Single static API key, checked before anything else. Missing/invalid -> 401.
   Compared in constant time (`hmac.compare_digest`) to avoid a timing side-channel.
-- Rotation: on suspected leak, or as occasional hygiene - no fixed schedule.
+- Rotation: **at least once a year** as routine hygiene, and immediately on any
+  suspected leak. (This is key rotation - distinct from log rotation, which is
+  automatic and file-based.)
 - **Optional Google-OIDC on `/mcp`** (added 2026-07-26, see decision section
   below): when `OAUTH_ENABLED`, the `/mcp` guard *also* accepts a Google bearer
   token — a request is authorised if it satisfies *either* the key *or* a valid
