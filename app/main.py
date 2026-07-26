@@ -258,7 +258,14 @@ async def job_kill_endpoint(
     return await run_in_threadpool(service.kill_job, request.job_id)
 
 
-@app.post("/reset_jobs")
-async def reset_jobs_endpoint(api_key: str = Depends(verify_api_key)):
-    """Hard reset: kill all jobs + wipe all job state and logs."""
-    return await run_in_threadpool(service.reset_jobs)
+class ResetRequest(BaseModel):
+    scope: str = "jobs"  # "jobs" | "logs" | "all"
+
+
+@app.post("/reset")
+async def reset_endpoint(
+    request: ResetRequest,
+    api_key: str = Depends(verify_api_key),
+):
+    """Reset ForPost's own state: scope = jobs | logs | all."""
+    return await run_in_threadpool(service.reset, request.scope)

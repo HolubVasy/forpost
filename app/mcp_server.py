@@ -65,7 +65,7 @@ full-access (whitelist must not be able to plant files).
 
 HEALTH: diagnostics() returns a one-call snapshot (alive?, memory, jobs
 running/stuck, versions, recent failures) - read it instead of digging through
-logs. reset_jobs() hard-resets stuck jobs (kill all + wipe job state/logs).
+logs. reset(scope="jobs"|"logs"|"all") clears own state: stuck jobs, logs, or all.
 
 LIMITS: output is capped (tail kept) to bound memory and context; every call is
 logged. Auth is a static X-API-Key header, configured once in the connector.
@@ -299,21 +299,26 @@ def diagnostics() -> dict:
 
 
 @mcp.tool(
-    title="Hard reset (jobs)",
+    title="Reset ForPost state",
     annotations=ToolAnnotations(
-        title="Hard reset (jobs)",
+        title="Reset ForPost state",
         readOnlyHint=False,
         destructiveHint=True,
         idempotentHint=True,
         openWorldHint=False,
     ),
 )
-def reset_jobs() -> dict:
-    """Hard reset: kill ALL running background jobs and wipe all job state +
-    log files (including orphaned logs). Use when jobs are stuck. Returns
-    {cleared: N}. Only touches ForPost's own job registry, not the host.
+def reset(scope: str = "jobs") -> dict:
+    """Reset ForPost's own state (never touches the host).
+
+    Args:
+        scope: "jobs" - kill all running jobs + wipe job state and job logs;
+               "logs" - truncate the command + app logs;
+               "all"  - both.
+
+    Returns what was cleared.
     """
-    return service.reset_jobs()
+    return _call(service.reset, scope)
 
 
 @mcp.resource(
@@ -366,7 +371,8 @@ symlink escape are rejected.
 - `diagnostics()` - one-call snapshot: `ok`, uptime, checks (docker/workspace/
   logs), memory (process + system), jobs (running/stuck/zombies), recent
   failures, tool versions. Read this instead of the logs. Also `GET /diagnostics`.
-- `reset_jobs()` - hard reset: kill all jobs + wipe all job state/logs.
+- `reset(scope="jobs"|"logs"|"all")` - clear own state: jobs (kill+wipe),
+  logs (truncate command+app logs), or all.
 
 ## Auth & limits
 Static `X-API-Key` header (set once in the connector). Rate limited; every call

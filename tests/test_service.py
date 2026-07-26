@@ -76,6 +76,21 @@ class TestDiagnostics:
         assert d["jobs"]["running"] == 0 and d["jobs"]["zombies"] == 0
         assert "commands" in d["recent"]
 
-    def test_reset_jobs_returns_cleared(self):
-        result = service.reset_jobs()
-        assert isinstance(result["cleared"], int)
+    def test_reset_jobs_scope(self):
+        result = service.reset("jobs")
+        assert result["scope"] == "jobs" and isinstance(result["jobs_cleared"], int)
+
+    def test_reset_logs_scope(self, env):
+        (env / "commands.jsonl").write_text('{"x":1}\n')
+        result = service.reset("logs")
+        assert "commands.jsonl" in result["logs_cleared"]
+        assert (env / "commands.jsonl").read_text() == ""
+
+    def test_reset_all_scope(self):
+        result = service.reset("all")
+        assert "jobs_cleared" in result and "logs_cleared" in result
+
+    def test_reset_bad_scope(self):
+        with pytest.raises(ForPostError) as e:
+            service.reset("bogus")
+        assert e.value.status_code == 400

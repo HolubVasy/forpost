@@ -112,10 +112,37 @@ def delete(path: str, mode: Mode) -> dict:
     return result
 
 
-def reset_jobs() -> dict:
-    """Hard reset: kill all running jobs and wipe all job state + log files.
-    Only touches ForPost's own job registry, not the host."""
-    return {"cleared": job_manager.purge()}
+def _clear_logs() -> list:
+    """Truncate ForPost's own logs (commands.jsonl + app.log)."""
+    logs_dir = Path(os.environ.get("LOGS_DIR", "logs"))
+    cleared = []
+    for name in ("commands.jsonl", "app.log"):
+        p = logs_dir / name
+        try:
+            if p.exists():
+                open(p, "w").close()  # truncate to zero
+                cleared.append(name)
+        except OSError:
+            pass
+    return cleared
+
+
+def reset(scope: str = "jobs") -> dict:
+    """Reset ForPost's own state (never touches the host).
+
+    scope:
+      - "jobs" : kill all running jobs + wipe job state and job logs
+      - "logs" : truncate the command + app logs
+      - "all"  : both of the above
+    """
+    if scope not in ("jobs", "logs", "all"):
+        raise ForPostError(400, "scope must be one of: jobs, logs, all")
+    result = {"scope": scope}
+    if scope in ("jobs", "all"):
+        result["jobs_cleared"] = job_manager.purge()
+    if scope in ("logs", "all"):
+        result["logs_cleared"] = _clear_logs()
+    return result
 
 
 def _writable(path: Path) -> dict:
