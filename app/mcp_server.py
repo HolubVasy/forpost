@@ -18,6 +18,7 @@ load_dotenv()
 
 from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 from app.executor import execute
 from app.file_ops import FileEncoding, delete_file, read_file, write_file
@@ -25,7 +26,19 @@ from app.logging_config import log_command, log_file_operation
 from app.modes import Mode, validate_command
 from app.rate_limit import rate_limiter
 
-mcp = FastMCP("ForPost")
+# stateless_http: each request is independent (no server-side session state) -
+#   the right fit for a remote connector calling a stateless command tunnel.
+# streamable_http_path "/": the ASGI sub-app serves at its own root, so mounting
+#   it under "/mcp" in main.py yields the public endpoint /mcp (not /mcp/mcp).
+# transport_security: disable DNS-rebinding / Host-header checks. ForPost runs
+#   behind the nginx reverse proxy (Host = forpost.poly-mind.net) and is guarded
+#   by X-API-Key; the default localhost-only Host check would 421 real traffic.
+mcp = FastMCP(
+    "ForPost",
+    stateless_http=True,
+    streamable_http_path="/",
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+)
 
 # Hard timeout for every command, per SPEC (5 minutes, not configurable).
 COMMAND_TIMEOUT = 300

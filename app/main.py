@@ -9,21 +9,64 @@ load_dotenv()
 from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
-from app.auth import verify_api_key
+from app.auth import get_api_key, verify_api_key
 from app.executor import execute
 from app.file_ops import FileEncoding, delete_file, read_file, write_file
 from app.logging_config import get_app_logger, log_command, log_file_operation
+from app.mcp_server import mcp
 from app.modes import Mode, validate_command
 from app.rate_limit import rate_limiter
+
+# Streamable-HTTP ASGI app exposing the MCP tools (execute_command + file ops).
+# Mounted at /mcp below so Claude custom connectors can reach it at
+# https://<host>/mcp, sharing the exact same logic as the REST endpoints.
+mcp_app = mcp.streamable_http_app()
+
+
+class MCPApiKeyGuard:
+    """ASGI middleware requiring a valid X-API-Key on the mounted /mcp app.
+
+    The FastAPI dependency (verify_api_key) only guards the REST routes; the
+    mounted MCP sub-app bypasses it, so without this every MCP call would be
+    unauthenticated. Same static-key model as the rest of ForPost.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            headers = dict(scope.get("headers") or [])
+            provided = headers.get(b"x-api-key", b"").decode()
+            try:
+                expected = get_api_key()
+            except RuntimeError:
+                expected = None
+            if not expected or provided != expected:
+                get_app_logger().warning("MCP request rejected: missing/invalid API key")
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"application/json")],
+                })
+                await send({
+                    "type": "http.response.body",
+                    "body": b'{"error":"Missing or invalid API key"}',
+                })
+                return
+        await self.app(scope, receive, send)
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     get_app_logger().info("ForPost started")
-    yield
+    # The MCP session manager must run for the streamable-HTTP endpoint to work.
+    async with mcp.session_manager.run():
+        yield
 
 
 app = FastAPI(title="ForPost", version="0.1.0", lifespan=lifespan)
+app.mount("/mcp", MCPApiKeyGuard(mcp_app))
 
 logger = get_app_logger()
 
