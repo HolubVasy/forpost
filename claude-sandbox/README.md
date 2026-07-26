@@ -108,10 +108,15 @@ never touch the pool.
 
 ## Status
 
-Built now: the builder container (Claude Code, non-root, subscription auth), the
-`task` wrapper (headless, fresh dir per task, auto-prune), `clean`, the opt-in
-compose.
+Built now:
+- the builder container (Claude Code, non-root, subscription auth), the `task`
+  wrapper (headless, fresh dir per task, auto-prune), `clean`, the opt-in compose;
+- the slot layer in git: DNS for `alpha1|alpha2|alpha3.poly-mind.net` is **live**,
+  and `../nginx/` holds the nginx configs (parking-spot pattern: empty slots serve
+  a static "slot free" page, occupying a slot = bring a container named `alphaN`
+  up), the one-time bootstrap runbook, and a sanitized shared-nginx example.
 
 Planned (design agreed, see `CLAUDE.md`): rootless dind so the builder brings up
-full stacks itself; the PR-as-report prompt convention; ForPost deploy into
-`alphaN.poly-mind.net` slots with compose sanitization; the master-driven fix loop.
+full stacks itself; the PR-as-report prompt convention; a DB-backed POC; the
+one-time slot bootstrap on the VPS (mount + SAN cert) and ForPost's occupy/free of
+slots with compose sanitization; the master-driven fix loop.

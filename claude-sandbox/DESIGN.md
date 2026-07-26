@@ -106,7 +106,11 @@ that it's sandboxed (rootless), and code reaches prod only through your review.
 - **Test stack** (app+db to verify): inside the builder's rootless docker;
   brought up and torn down **by the builder**, per task; ephemeral; never exposed.
 - **Deploy slot** (`alphaN.poly-mind.net`): on the host, deployed and freed **by
-  ForPost** on command; persistent (a running service you use); max three.
+  ForPost** on command; persistent (a running service you use); max three. The
+  nginx layer is a **parking spot** — `resolver` + variable `proxy_pass` + an
+  `error_page` fallback to a static "slot free" page, so occupying/freeing a slot
+  is just bringing a container named `alphaN` up/down; the nginx config never
+  changes on deploy. Config + bootstrap runbook live in the repo under `nginx/`.
 
 ## 6. Out of scope
 
@@ -117,10 +121,15 @@ that it's sandboxed (rootless), and code reaches prod only through your review.
 
 ## 7. Status / rollout
 
-1. **Now:** builder container (subscription auth, non-root), `task`/`clean`,
-   opt-in compose. *(built)*
-2. **Next:** rootless dind so the builder brings up full stacks itself.
-3. **Then:** PR-as-report prompt convention; a DB-backed POC (app + Postgres)
+1. **Done:** builder container (subscription auth, non-root), `task`/`clean`,
+   opt-in compose.
+2. **Done:** slot naming + DNS (`alpha1|alpha2|alpha3.poly-mind.net` → VPS live)
+   and the nginx slot layer in git (`nginx/`: HTTP-01 + HTTPS blocks, static
+   "slot free" fallback, bootstrap runbook, sanitized shared-nginx example).
+   *Remaining for slots:* the one-time VPS bootstrap (mount + SAN cert) and
+   ForPost's occupy/free.
+3. **Next:** rootless dind so the builder brings up full stacks itself.
+4. **Then:** PR-as-report prompt convention; a DB-backed POC (app + Postgres)
    that exercises D3.
-4. **Then:** ForPost deploy into `alphaN.poly-mind.net` slots with compose
-   sanitization; the master-driven fix loop (D6).
+5. **Then:** ForPost occupy/free of `alphaN` slots with compose sanitization;
+   the master-driven fix loop (D6).

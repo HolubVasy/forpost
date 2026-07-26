@@ -64,7 +64,9 @@ Every PR description must carry, so the human never has to chase anything:
 Solutions run in a **fixed pool** `alpha1|alpha2|alpha3.poly-mind.net` (one SAN cert
 via HTTP-01 — no wildcard, no DNS-01). Names are neutral and reusable: a slot is
 a container, its content changes; ForPost deploys a solution into a free slot and
-frees it on command. Slots are the only externally-exposed surface.
+frees it on command. Slots are the only externally-exposed surface. The nginx
+layer (parking-spot pattern: variable `proxy_pass` + static "slot free" fallback,
+never rewritten on deploy) and its bootstrap runbook live in the repo `nginx/`.
 
 ## What NOT to do
 

@@ -1,0 +1,43 @@
+# EXAMPLE — the shared LibreChat-NGINX service, showing ONLY what our slots need.
+#
+# This is a REFERENCE, not a live file. The real LibreChat compose lives with the
+# LibreChat project on the VPS and is not ours to own. Copy the marked lines into
+# it once (the one-time bootstrap in README.md), then everything slot-related
+# rides via `git pull` of /opt/forpost.
+#
+# Sanitised: no secrets, no LibreChat-specific volumes/env beyond the shape.
+services:
+  nginx:                                   # container_name: LibreChat-NGINX
+    image: nginx:alpine
+    container_name: LibreChat-NGINX
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # --- LibreChat's own config (illustrative — owned by LibreChat) ---
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - certbot_etc:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+
+      # --- forpost deploy slots: ADD THESE (paths = the /opt/forpost checkout) ---
+      # 1) HTTP block first (ACME + redirect); enable before the cert exists.
+      - /opt/forpost/nginx/forpost-slots-http.conf:/etc/nginx/conf.d/forpost-slots-http.conf:ro
+      # 2) HTTPS block; add only AFTER `certbot --cert-name alpha-slots` succeeds.
+      - /opt/forpost/nginx/forpost-slots.conf:/etc/nginx/conf.d/forpost-slots.conf:ro
+      # 3) the "slot free" static page served for an empty slot.
+      - /opt/forpost/nginx/html:/usr/share/nginx/html/forpost-slots:ro
+    networks:
+      - librechat_default                  # slots' alphaN containers join the SAME net
+
+# The alphaN solution containers ForPost brings up must attach here so nginx's
+# embedded DNS (127.0.0.11) can resolve `alpha1`/`alpha2`/`alpha3`.
+networks:
+  librechat_default:
+    external: true
+
+volumes:
+  certbot_etc:
+    external: true
+  certbot_www:
+    external: true
