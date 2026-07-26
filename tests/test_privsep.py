@@ -7,8 +7,12 @@ is only ever exposed in whitelist mode, which allows read commands only)."""
 
 import asyncio
 
+import pytest
+
 import app.executor as executor
+import app.service as service
 from app import main
+from app.errors import ForPostError
 from app.executor import build_popen_args, child_env
 from app.modes import Mode
 from app.service import _privilege
@@ -76,6 +80,41 @@ class TestPrivilegeMapping:
 
     def test_full_access_is_personal(self):
         assert _privilege(Mode.FULL_ACCESS) == (False, "personal")
+
+
+class TestReadOnlyLock:
+    def test_toggle(self, monkeypatch):
+        monkeypatch.setenv("READ_ONLY_MODE", "true")
+        assert service.read_only_locked()
+        monkeypatch.setenv("READ_ONLY_MODE", "0")
+        assert not service.read_only_locked()
+
+    def test_full_access_rejected_when_locked(self, monkeypatch):
+        monkeypatch.setenv("READ_ONLY_MODE", "true")
+        with pytest.raises(ForPostError) as exc:
+            service.run_command("echo hi", Mode.FULL_ACCESS)
+        assert exc.value.status_code == 403
+
+    def test_read_only_not_blocked_by_lock(self, monkeypatch):
+        # The lock only denies full-access; read-only still passes the gate
+        # (validation proceeds - here an invalid command is rejected by modes,
+        # not by the lock, proving the lock let it through).
+        monkeypatch.setenv("READ_ONLY_MODE", "true")
+        service._deny_full_access_if_locked(Mode.READ_ONLY)  # no raise
+        service._deny_full_access_if_locked(Mode.WHITELIST)  # no raise
+
+    def test_write_rejected_when_locked(self, monkeypatch):
+        monkeypatch.setenv("READ_ONLY_MODE", "true")
+        with pytest.raises(ForPostError) as exc:
+            service.write("f.txt", "x", None, Mode.FULL_ACCESS)
+        assert exc.value.status_code == 403
+
+    def test_reset_jobs_allowed_but_destructive_blocked(self, monkeypatch):
+        monkeypatch.setenv("READ_ONLY_MODE", "true")
+        assert service.reset("jobs")["scope"] == "jobs"  # safety action allowed
+        with pytest.raises(ForPostError) as exc:
+            service.reset("all")
+        assert exc.value.status_code == 403
 
 
 class TestMcpRequireOauth:

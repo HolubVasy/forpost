@@ -156,6 +156,11 @@ user (`forpost-ro`) that can't read the app's environment, the API key, the
 audit log, or the docker socket — so a restricted command cannot exfiltrate the
 key and self-escalate. See [Modes](#modes).
 
+**Read-only kill-switch.** `READ_ONLY_MODE=true` makes the server refuse
+full-access, file writes/deletes and destructive reset entirely — only reading
+runs. A safe posture while building trust; it also means a leaked key can do no
+damage (nothing to escalate to). Set it to `false` when you want writes back.
+
 Additional layers on the VPS: nginx `limit_req`/`limit_conn` (flood &
 brute-force protection, returns 429) and an app-level rate limit
 (`RATE_LIMIT_PER_MINUTE`, default 120) covering both REST and `/mcp`.
@@ -188,6 +193,7 @@ Any MCP client can discover ForPost's capabilities over the wire:
 | `OAUTH_CLIENT_ID` | empty | Google OAuth client ID a bearer's audience must match. |
 | `OAUTH_ALLOWED_EMAILS` | empty | Comma-separated allow-list: exact emails and/or `@domain`. |
 | `MCP_REQUIRE_OAUTH` | `false` | Make `/mcp` OAuth-only (refuse `X-API-Key` there; needs `OAUTH_ENABLED`). |
+| `READ_ONLY_MODE` | `false` | Kill-switch: refuse full-access, file writes/deletes and destructive reset — only reading. |
 | `RESTRICTED_COMMAND_USER` | empty | User read-only/whitelist commands run as (set to `forpost-ro` by the image). |
 | `PUBLIC_URL` | `https://forpost.poly-mind.net` | External base, published in the OAuth metadata. |
 | `PORT` | 8000 | Container listen port. |

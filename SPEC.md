@@ -418,6 +418,15 @@ Fix: **restricted-mode commands run as a separate, unprivileged user.**
 Full-access still runs as `forpost` with the docker socket - the escape hatch,
 root-equivalent by design. The guarantee is only about the restricted modes.
 
+## Read-only kill-switch (2026-07-26)
+
+`READ_ONLY_MODE=true` is a global server-side lock: full-access commands, file
+writes/deletes and destructive `reset` (anything but `reset(scope="jobs")`) are
+refused no matter what mode a call declares - only read-only/whitelist reading
+runs. Intended as a cautious default while trust is built, and as defence in
+depth: with full-access disabled there is nothing for a leaked key to escalate
+to. Flip to `false` to re-enable writes.
+
 ## MCP OAuth-only option (2026-07-26)
 
 `MCP_REQUIRE_OAUTH=true` makes `/mcp` accept **only** a Google-OIDC bearer - the

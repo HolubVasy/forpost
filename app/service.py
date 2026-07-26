@@ -31,6 +31,25 @@ def clamp_timeout(requested: int) -> int:
     return max(1, min(int(requested), hard_max))
 
 
+_READ_ONLY_MSG = (
+    "ForPost is in read-only mode (READ_ONLY_MODE); "
+    "full-access, file writes and destructive reset are disabled"
+)
+
+
+def read_only_locked() -> bool:
+    """Global kill-switch: when set, the server refuses everything that isn't
+    pure reading (full-access, write_file, delete_file, destructive reset) no
+    matter what mode a call declares. A leaked key then can't do damage either -
+    there is nothing to escalate to."""
+    return os.environ.get("READ_ONLY_MODE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _deny_full_access_if_locked(mode: Mode) -> None:
+    if read_only_locked() and mode == Mode.FULL_ACCESS:
+        raise ForPostError(403, _READ_ONLY_MSG)
+
+
 def harden_runtime_permissions() -> None:
     """Best-effort at startup: lock down dir perms so a volume created before
     privilege separation still hides the audit log and app env from the
@@ -69,6 +88,7 @@ def _privilege(mode: Mode) -> tuple[bool, str | None]:
 
 def run_command(command: str, mode: Mode, timeout: int = DEFAULT_TIMEOUT) -> dict:
     """Validate, run synchronously, log, and return the result."""
+    _deny_full_access_if_locked(mode)
     allowed, reason = validate_command(command, mode)
     if not allowed:
         raise ForPostError(403, reason)
@@ -96,6 +116,7 @@ def run_command(command: str, mode: Mode, timeout: int = DEFAULT_TIMEOUT) -> dic
 
 def start_job(command: str, mode: Mode, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     """Validate and start a background job; returns its id."""
+    _deny_full_access_if_locked(mode)
     allowed, reason = validate_command(command, mode)
     if not allowed:
         raise ForPostError(403, reason)
@@ -128,6 +149,8 @@ def kill_job(job_id: str) -> dict:
 
 
 def write(path: str, content: str, encoding: FileEncoding, mode: Mode) -> dict:
+    if read_only_locked():
+        raise ForPostError(403, _READ_ONLY_MSG)
     # full-access only: allowing writes in whitelist mode + a whitelisted
     # `docker compose up` would let a crafted compose file escalate to the host.
     if mode != Mode.FULL_ACCESS:
@@ -150,6 +173,8 @@ def read(
 
 
 def delete(path: str, mode: Mode) -> dict:
+    if read_only_locked():
+        raise ForPostError(403, _READ_ONLY_MSG)
     if mode != Mode.FULL_ACCESS:
         raise ForPostError(403, "delete_file requires full-access mode")
     result = delete_file(path)
@@ -210,6 +235,9 @@ def reset(scope: str = "jobs") -> dict:
     """
     if scope not in ("jobs", "logs", "workspace", "all"):
         raise ForPostError(400, "scope must be one of: jobs, logs, workspace, all")
+    if read_only_locked() and scope != "jobs":
+        # jobs is a safety action (kill stuck jobs); wiping logs/workspace is not.
+        raise ForPostError(403, _READ_ONLY_MSG)
     result = {"scope": scope}
     if scope in ("jobs", "all"):
         result["jobs_cleared"] = job_manager.purge()
