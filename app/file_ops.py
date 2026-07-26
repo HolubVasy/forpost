@@ -5,7 +5,7 @@ import os
 from enum import Enum
 from pathlib import Path
 
-from fastapi import HTTPException
+from app.errors import ForPostError
 
 
 class FileEncoding(str, Enum):
@@ -24,7 +24,7 @@ def _resolve_path(path: str) -> Path:
     resolved = (workspace / path).resolve()
     # Ensure path doesn't escape the workspace
     if not str(resolved).startswith(str(workspace.resolve())):
-        raise HTTPException(status_code=403, detail="Path escapes workspace boundary")
+        raise ForPostError(403, "Path escapes workspace boundary")
     return resolved
 
 
@@ -49,7 +49,7 @@ def read_file(path: str, encoding: FileEncoding) -> dict:
     resolved = _resolve_path(path)
 
     if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        raise ForPostError(404, f"File not found: {path}")
 
     if encoding == FileEncoding.BASE64:
         data = resolved.read_bytes()
@@ -67,9 +67,9 @@ def delete_file(path: str) -> dict:
     resolved = _resolve_path(path)
 
     if not resolved.exists():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        raise ForPostError(404, f"File not found: {path}")
     if resolved.is_dir():
-        raise HTTPException(status_code=400, detail="Cannot delete a directory")
+        raise ForPostError(400, "Cannot delete a directory")
 
     resolved.unlink()
     return {"path": str(resolved)}

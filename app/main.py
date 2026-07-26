@@ -1,29 +1,23 @@
 """ForPost - main FastAPI application."""
 
-import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-
-def _clamp_timeout(requested: int) -> int:
-    """Clamp a per-request timeout to [1, MAX_TIMEOUT_SECONDS] (default 1800)."""
-    hard_max = int(os.environ.get("MAX_TIMEOUT_SECONDS", "1800"))
-    return max(1, min(int(requested), hard_max))
-
+from app import service
 from app.auth import get_api_key, keys_match, verify_api_key
-from app.executor import execute
-from app.file_ops import FileEncoding, delete_file, read_file, write_file
-from app.jobs import job_manager
-from app.logging_config import get_app_logger, log_command, log_file_operation
+from app.errors import ForPostError
+from app.file_ops import FileEncoding
+from app.logging_config import get_app_logger
 from app.mcp_server import mcp
-from app.modes import Mode, validate_command
+from app.modes import Mode
 from app.rate_limit import rate_limiter
 
 # Streamable-HTTP ASGI app exposing the MCP tools (execute_command + file ops).
@@ -89,6 +83,12 @@ app.mount("/mcp", MCPApiKeyGuard(mcp_app))
 logger = get_app_logger()
 
 
+@app.exception_handler(ForPostError)
+async def _forpost_error_handler(request: Request, exc: ForPostError):
+    """Central translation of domain errors to HTTP responses."""
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
 @app.get("/health")
 async def health():
     """Unauthenticated liveness check for container healthchecks / proxies."""
@@ -114,36 +114,10 @@ async def execute_command(
     request: ExecuteRequest,
     api_key: str = Depends(verify_api_key),
 ):
-    # Rate limit check
     rate_limiter.check()
-
-    # Validate command against mode
-    allowed, reason = validate_command(request.command, request.mode)
-    if not allowed:
-        logger.warning(f"Command rejected: {reason}")
-        raise HTTPException(status_code=403, detail=reason)
-
-    # Execute in a worker thread so a long command doesn't block the event
-    # loop (and /health). Timeout is per-call, clamped to the hard max.
-    timeout = _clamp_timeout(request.timeout)
-    result = await run_in_threadpool(execute, request.command, timeout)
-    timed_out = result.exit_code == -1
-
-    # Log the command execution (blocking file append -> threadpool)
-    await run_in_threadpool(
-        log_command,
-        command=request.command,
-        mode=request.mode.value,
-        exit_code=result.exit_code,
-        stdout=result.stdout,
-        stderr=result.stderr,
-    )
-
-    return ExecuteResponse(
-        stdout=result.stdout,
-        stderr=result.stderr,
-        exit_code=result.exit_code,
-        timed_out=timed_out,
+    # Offloaded to a worker thread so a long command doesn't block the loop.
+    return await run_in_threadpool(
+        service.run_command, request.command, request.mode, request.timeout
     )
 
 
@@ -189,18 +163,9 @@ async def write_file_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-
-    # read-only mode cannot write
-    if request.mode == Mode.READ_ONLY:
-        raise HTTPException(status_code=403, detail="write_file not allowed in read-only mode")
-
-    result = await run_in_threadpool(
-        write_file, request.path, request.content, request.encoding
+    return await run_in_threadpool(
+        service.write, request.path, request.content, request.encoding, request.mode
     )
-    await run_in_threadpool(
-        log_file_operation, "write_file", result["path"], request.mode.value, result["size"]
-    )
-    return WriteFileResponse(**result)
 
 
 @app.post("/read_file", response_model=ReadFileResponse)
@@ -209,13 +174,9 @@ async def read_file_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-
-    # read_file is allowed in all modes
-    result = await run_in_threadpool(read_file, request.path, request.encoding)
-    await run_in_threadpool(
-        log_file_operation, "read_file", result["path"], request.mode.value, result["size"]
+    return await run_in_threadpool(
+        service.read, request.path, request.encoding, request.mode
     )
-    return ReadFileResponse(**result)
 
 
 @app.post("/delete_file", response_model=DeleteFileResponse)
@@ -224,16 +185,7 @@ async def delete_file_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-
-    # read-only mode cannot delete
-    if request.mode == Mode.READ_ONLY:
-        raise HTTPException(status_code=403, detail="delete_file not allowed in read-only mode")
-
-    result = await run_in_threadpool(delete_file, request.path)
-    await run_in_threadpool(
-        log_file_operation, "delete_file", result["path"], request.mode.value
-    )
-    return DeleteFileResponse(**result)
+    return await run_in_threadpool(service.delete, request.path, request.mode)
 
 
 # --- Background jobs (async model for long-running commands) ---
@@ -260,21 +212,9 @@ async def run_async_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-    allowed, reason = validate_command(request.command, request.mode)
-    if not allowed:
-        logger.warning(f"Async command rejected: {reason}")
-        raise HTTPException(status_code=403, detail=reason)
-    timeout = _clamp_timeout(request.timeout)
-    job_id = await run_in_threadpool(job_manager.start, request.command, timeout)
-    await run_in_threadpool(
-        log_command,
-        command=request.command,
-        mode=request.mode.value,
-        exit_code=0,
-        stdout=f"[async job started: {job_id}]",
-        stderr="",
+    return await run_in_threadpool(
+        service.start_job, request.command, request.mode, request.timeout
     )
-    return {"job_id": job_id, "status": "running"}
 
 
 @app.post("/job_status")
@@ -283,10 +223,9 @@ async def job_status_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-    try:
-        return await run_in_threadpool(job_manager.status, request.job_id, request.offset)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"No such job: {request.job_id}")
+    return await run_in_threadpool(
+        service.get_job_status, request.job_id, request.offset
+    )
 
 
 @app.post("/job_kill")
@@ -295,7 +234,4 @@ async def job_kill_endpoint(
     api_key: str = Depends(verify_api_key),
 ):
     rate_limiter.check()
-    try:
-        return await run_in_threadpool(job_manager.kill, request.job_id)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"No such job: {request.job_id}")
+    return await run_in_threadpool(service.kill_job, request.job_id)

@@ -1,10 +1,10 @@
 """MCP wrapper for ForPost.
 
-Exposes the same functionality as the HTTP endpoints (main.py) as MCP tools
-Claude can call: execute_command plus the three file operations. This layer
-adds no logic of its own - it orchestrates the exact same Phase-1 building
-blocks (validate_command, execute, file_ops, logging, rate_limiter) that the
-HTTP endpoints use, so both surfaces behave identically.
+Exposes ForPost's functionality as MCP tools Claude can call. Each tool is a
+thin adapter over the shared service layer (app/service.py) - the same layer the
+REST endpoints (main.py) use - so both surfaces behave identically. This module
+owns only the MCP-specific concerns: tool schemas, titles, annotations, the
+server manual, and translating domain errors into ToolErrors.
 
 Auth note: a single static API key is the auth model (per SPEC). For the MCP
 surface the key is enforced at the HTTP transport layer (reverse proxy /
@@ -18,16 +18,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
-from app.executor import execute
-from app.file_ops import FileEncoding, delete_file, read_file, write_file
-from app.jobs import job_manager
-from app.logging_config import log_command, log_file_operation
-from app.modes import Mode, validate_command
+from app import service
+from app.errors import ForPostError
+from app.file_ops import FileEncoding
+from app.modes import Mode
+from app.service import DEFAULT_JOB_TIMEOUT, DEFAULT_TIMEOUT
 
 # stateless_http: each request is independent (no server-side session state) -
 #   the right fit for a remote connector calling a stateless command tunnel.
@@ -77,17 +76,17 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
 )
 
-# Default per-call timeout (seconds); callers may override, clamped to the max.
-DEFAULT_TIMEOUT = 300
+# Auth + rate limiting for the MCP surface are applied once at the ASGI transport
+# guard (main.py MCPApiKeyGuard), not per tool. Each tool below is a thin adapter
+# over the shared service layer; domain errors become ToolErrors via _call.
 
 
-def _clamp_timeout(requested: int) -> int:
-    hard_max = int(os.environ.get("MAX_TIMEOUT_SECONDS", "1800"))
-    return max(1, min(int(requested), hard_max))
-
-# Note: auth + rate limiting for the MCP surface are applied once at the ASGI
-# transport guard (main.py MCPApiKeyGuard), not per tool - so tools don't
-# re-check (which would double-count against the shared rate limiter).
+def _call(fn, *args, **kwargs):
+    """Run a service function, translating ForPostError -> ValueError (ToolError)."""
+    try:
+        return fn(*args, **kwargs)
+    except ForPostError as exc:
+        raise ValueError(exc.detail) from exc
 
 
 @mcp.tool(
@@ -112,24 +111,7 @@ def execute_command(command: str, mode: Mode, timeout: int = DEFAULT_TIMEOUT) ->
 
     Returns stdout, stderr, exit_code, and timed_out.
     """
-    allowed, reason = validate_command(command, mode)
-    if not allowed:
-        raise ValueError(reason)
-
-    result = execute(command, timeout=_clamp_timeout(timeout))
-    log_command(
-        command=command,
-        mode=mode.value,
-        exit_code=result.exit_code,
-        stdout=result.stdout,
-        stderr=result.stderr,
-    )
-    return {
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "exit_code": result.exit_code,
-        "timed_out": result.exit_code == -1,
-    }
+    return _call(service.run_command, command, mode, timeout)
 
 
 @mcp.tool(
@@ -158,16 +140,7 @@ def write_file_tool(
 
     Returns the resolved path and byte size written.
     """
-    if mode == Mode.READ_ONLY:
-        raise ValueError("write_file not allowed in read-only mode")
-
-    try:
-        result = write_file(path, content, encoding)
-    except HTTPException as exc:
-        raise ValueError(exc.detail) from exc
-
-    log_file_operation("write_file", result["path"], mode.value, result["size"])
-    return result
+    return _call(service.write, path, content, encoding, mode)
 
 
 @mcp.tool(
@@ -194,13 +167,7 @@ def read_file_tool(
 
     Returns the resolved path, content, and byte size.
     """
-    try:
-        result = read_file(path, encoding)
-    except HTTPException as exc:
-        raise ValueError(exc.detail) from exc
-
-    log_file_operation("read_file", result["path"], mode.value, result["size"])
-    return result
+    return _call(service.read, path, encoding, mode)
 
 
 @mcp.tool(
@@ -222,16 +189,7 @@ def delete_file_tool(path: str, mode: Mode) -> dict:
 
     Returns the resolved path deleted.
     """
-    if mode == Mode.READ_ONLY:
-        raise ValueError("delete_file not allowed in read-only mode")
-
-    try:
-        result = delete_file(path)
-    except HTTPException as exc:
-        raise ValueError(exc.detail) from exc
-
-    log_file_operation("delete_file", result["path"], mode.value)
-    return result
+    return _call(service.delete, path, mode)
 
 
 # --- Background jobs (async model for long-running commands) ---
@@ -247,7 +205,7 @@ def delete_file_tool(path: str, mode: Mode) -> dict:
         openWorldHint=True,
     ),
 )
-def run_async(command: str, mode: Mode, timeout: int = 1800) -> dict:
+def run_async(command: str, mode: Mode, timeout: int = DEFAULT_JOB_TIMEOUT) -> dict:
     """Start a long-running command in the background and return a job_id at once.
 
     Use this instead of execute_command for tasks that outlive a single request
@@ -261,18 +219,7 @@ def run_async(command: str, mode: Mode, timeout: int = 1800) -> dict:
 
     Returns job_id and status.
     """
-    allowed, reason = validate_command(command, mode)
-    if not allowed:
-        raise ValueError(reason)
-    job_id = job_manager.start(command, _clamp_timeout(timeout))
-    log_command(
-        command=command,
-        mode=mode.value,
-        exit_code=0,
-        stdout=f"[async job started: {job_id}]",
-        stderr="",
-    )
-    return {"job_id": job_id, "status": "running"}
+    return _call(service.start_job, command, mode, timeout)
 
 
 @mcp.tool(
@@ -298,10 +245,7 @@ def job_status(job_id: str, offset: int = 0) -> dict:
     Returns status, running, exit_code, output, offset, next_offset,
     total_bytes, truncated.
     """
-    try:
-        return job_manager.status(job_id, offset)
-    except KeyError:
-        raise ValueError(f"No such job: {job_id}")
+    return _call(service.get_job_status, job_id, offset)
 
 
 @mcp.tool(
@@ -316,10 +260,7 @@ def job_status(job_id: str, offset: int = 0) -> dict:
 )
 def job_kill(job_id: str) -> dict:
     """Terminate a running background job. Returns job_id and status."""
-    try:
-        return job_manager.kill(job_id)
-    except KeyError:
-        raise ValueError(f"No such job: {job_id}")
+    return _call(service.kill_job, job_id)
 
 
 @mcp.resource(
