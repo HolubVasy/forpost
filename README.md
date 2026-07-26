@@ -38,9 +38,18 @@ on any device.
 2. Copy `.env.example` to `.env`, fill in:
    - `API_KEY` - your ForPost auth key
    - `GITHUB_TOKEN` - dedicated bot account token
-3. `docker compose up -d --build`
+3. Build and start, passing the host's docker group GID so the mounted
+   socket is usable by the non-root `forpost` user:
+   ```
+   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
+   ```
 4. Point your domain at the container (reverse proxy + Let's Encrypt)
 5. Add ForPost as an MCP connector in Claude using your domain + API key
+
+The container runs the FastAPI service (`uvicorn app.main:app`) on port 8000
+as the non-root `forpost` user, in the `docker` group, with `/home/forpost`
+persisted on the `forpost_home` volume. `GET /health` is an unauthenticated
+liveness check (used by the container HEALTHCHECK and any reverse proxy).
 
 ## Logs
 

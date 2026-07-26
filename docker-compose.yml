@@ -1,0 +1,28 @@
+# ForPost service definition.
+#
+# On the VPS, build with the host's docker group GID so the mounted socket is
+# usable by the non-root `forpost` user:
+#   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
+services:
+  forpost:
+    build:
+      context: .
+      args:
+        DOCKER_GID: ${DOCKER_GID:-999}
+    image: forpost:latest
+    container_name: forpost
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      # Host docker socket - lets ForPost manage other containers (Linux VPS).
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist the managed workspace + logs across restarts/rebuilds.
+      - forpost_home:/home/forpost
+      # Whitelist is editable without a rebuild.
+      - ./whitelist.config:/app/whitelist.config:ro
+
+volumes:
+  forpost_home:

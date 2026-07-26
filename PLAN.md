@@ -59,15 +59,22 @@ to the same logic as the HTTP endpoint. ✅ met (97 tests green).
 Run the MCP server: `python -m app.mcp_server` (stdio by default;
 set `MCP_TRANSPORT=streamable-http` for remote/VPS use).
 
-## Phase 3: Containerization
+## Phase 3: Containerization ✅ (done - 2026-07-26)
 
 Goal: ForPost runs in Docker, ready to deploy.
 
-- [ ] `Dockerfile` - Ubuntu base, install bash/git/gh/docker-cli/docker-compose
-- [ ] `docker-compose.yml` - service definition, volume for `/home/forpost/`,
-      mount docker socket, env vars from `.env`
-- [ ] Non-root `forpost` user in container, member of `docker` group
-- [ ] Build and run locally, smoke test with `docker compose up`
+- [x] `Dockerfile` - Ubuntu 24.04 base, bash/git/gh/docker-cli/docker-compose
+      + Python venv; `GET /health` endpoint added for the container HEALTHCHECK
+- [x] `docker-compose.yml` - service definition, `forpost_home` volume for
+      `/home/forpost/`, docker socket mount, env from `.env`, `DOCKER_GID`
+      build arg to match the host docker group; `.dockerignore` added
+- [x] Non-root `forpost` user in container, member of `docker` group
+      (verified: `uid=1001(forpost) ... groups=...,999(docker)`)
+- [x] Build and run locally, smoke test — image builds; container starts and
+      is HEALTHCHECK-healthy; `/health` 200, read-only `echo` 200, no key 401,
+      write in read-only 403. `docker compose config` validates.
+      (Local smoke used `docker run` since the unix socket can't be mounted on
+      Docker Desktop/Windows; the socket mount is exercised on the Linux VPS.)
 
 **Exit criteria:** container builds, starts, responds to a read-only
 request from the host machine.

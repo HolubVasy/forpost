@@ -29,6 +29,12 @@ HEADERS = {"X-API-Key": "test-key"}
 
 
 class TestIntegration:
+    def test_health_endpoint_no_auth(self, client):
+        # Health check must work without an API key.
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}
+
     def test_valid_read_only_command(self, client, setup_env):
         response = client.post(
             "/execute",

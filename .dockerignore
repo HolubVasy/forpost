@@ -1,0 +1,24 @@
+# Secrets - never bake into the image
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# Runtime data (mounted as a volume at runtime)
+logs/*.jsonl
+logs/*.log
+
+# VCS / project meta
+.git/
+.gitignore
+*.md
+tests/
+
+# OS
+.DS_Store
+Thumbs.db

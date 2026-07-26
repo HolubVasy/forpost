@@ -28,6 +28,12 @@ app = FastAPI(title="ForPost", version="0.1.0", lifespan=lifespan)
 logger = get_app_logger()
 
 
+@app.get("/health")
+async def health():
+    """Unauthenticated liveness check for container healthchecks / proxies."""
+    return {"status": "ok"}
+
+
 class ExecuteRequest(BaseModel):
     command: str
     mode: Mode
