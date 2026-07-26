@@ -1,206 +1,228 @@
 # ForPost
 
-A personal MCP server that gives Claude a command-line tunnel into your VPS.
+A personal MCP server that gives Claude a secure command-line tunnel into your
+VPS. Send a command and a mode; ForPost runs it on the server and returns
+`stdout` / `stderr` / `exit_code` — from Claude chat, on **any device including
+your phone**. It executes and returns: no smart logic, no retries, no rollback —
+all reasoning stays on Claude's side.
 
-## What it does
+**Status:** live at `https://forpost.poly-mind.net` — MCP endpoint
+`https://forpost.poly-mind.net/mcp/`.
 
-Send a command and a mode, ForPost runs it and returns the result.
-That's the whole thing. Used for: creating GitHub repos, deploying
-Docker containers, reading logs, restarting services - all from chat,
-on any device.
+## Why ForPost
+
+- **Manage infra from chat, anywhere.** Create GitHub repos, deploy Docker
+  containers, read logs, restart services — from Claude on desktop or mobile.
+  No SSH, no copy-pasting commands.
+- **Safe by mode.** Every call declares `read-only` / `whitelist` /
+  `full-access`. The first two reject writes *and* shell-injection, so you can
+  hand Claude a real guardrail.
+- **Long tasks, followed live.** `docker build` / deploys run as background
+  jobs you poll for progress — no 5-minute wall, no lost output.
+- **Minimal & auditable.** One small FastAPI service, a JSONL audit log, a
+  single API key, no database.
+- **Self-describing.** The MCP server ships its own manual and per-tool
+  annotations, so any client discovers exactly what it can do.
+
+## Quick Start — connect it to Claude (and your phone)
+
+> Prerequisite: ForPost is deployed and reachable over HTTPS (see
+> [Deployment](#deployment-vps)). The public instance is already up.
+
+1. **Get your API key** (never paste it into chats or screenshots):
+   ```bash
+   ssh root@<your-vps> "grep ^API_KEY= /opt/forpost/.env"
+   ```
+   Copy the value after `API_KEY=`.
+
+2. **Add the connector** in Claude.ai → **Settings → Connectors → Add custom
+   connector**:
+   - **Name:** `ForPost`
+   - **URL:** `https://forpost.poly-mind.net/mcp/`  *(keep the trailing slash)*
+   - **Advanced → Request headers:** name `X-API-Key`, value = your key
+   - **Save**
+
+3. **Use it.** Open a new chat, enable the ForPost connector, and ask e.g.
+   *"via ForPost, run `docker ps` in read-only"*.
+
+4. **On your phone.** Nothing extra to do — connectors are **account-level**, so
+   once added from any device they appear in the Claude mobile app (iOS/Android)
+   automatically.
+
+> If the connector dialog has no **Request headers** section, header auth (a
+> beta feature) isn't enabled on your account yet — request access from
+> Anthropic, or front `/mcp` with a small OAuth shim.
+
+## Tools
+
+Seven tools, exposed both as MCP tools (for the connector) and as REST endpoints
+(for scripts/tests). They share the exact same logic.
+
+| Tool | Purpose |
+|------|---------|
+| `execute_command(command, mode, timeout?)` | Run a shell command, wait, return `stdout`/`stderr`/`exit_code`/`timed_out`. |
+| `run_async(command, mode, timeout?)` | Start a long command in the background → returns a `job_id` immediately. |
+| `job_status(job_id, offset?)` | Poll a job: status, exit_code, and new output from `offset` (follow progress + paginate). |
+| `job_kill(job_id)` | Terminate a running job. |
+| `write_file_tool(path, content, mode, encoding?)` | Write a file in the workspace (`text` or `base64`). |
+| `read_file_tool(path, mode, encoding?)` | Read a file (allowed in every mode). |
+| `delete_file_tool(path, mode)` | Delete a file. |
 
 ## Modes
 
+Declared per call. They gate what a command is allowed to do:
+
 | Mode | Behavior |
 |------|----------|
-| `read-only` | Inspection only. Write commands rejected. |
-| `whitelist` | Command must match an entry in `whitelist.config`. |
-| `full-access` | Anything runs, immediately, no confirmation. |
+| `read-only` | Inspection only (`ls`, `cat`, `docker ps/logs`, `git status`, `df`, `ps`…). Write commands **and** shell metacharacters (`; \| & \` $ ( ) < >`, newlines) are rejected. |
+| `whitelist` | Only commands matching an entry in `whitelist.config` on the VPS; metacharacters likewise rejected. |
+| `full-access` | Anything runs immediately, no gate. |
 
-## Local Development
+`read-only` and `whitelist` are guardrails — **protection from self**, not a
+sandbox. They stop chaining a second command in (`ls; rm -rf`), but they do
+**not** neuter an allowed command's own dangerous flags (e.g. `find -delete`).
+Use `full-access` consciously when you actually need pipes or chaining. All
+three modes are fully logged.
 
-1. Create a Python virtualenv, `pip install -r requirements.txt`
-2. Copy `.env.example` to `.env`, fill with dummy values (e.g.
-   `API_KEY=dev-local-key`) - no real secrets needed locally
-3. Run the service: `uvicorn app.main:app --reload`
-4. Run tests: `pytest`
-5. Smoke test manually:
-   ```
-   curl -X POST http://localhost:8000/execute \
-     -H "X-API-Key: dev-local-key" \
-     -H "Content-Type: application/json" \
-     -d '{"command": "echo hello", "mode": "read-only"}'
-   ```
+## Long-running commands (async jobs)
 
-## Setup (VPS / Production)
+`execute_command` is synchronous — it waits and returns the result, bounded by
+its timeout. For anything that outlives a single request (`docker build`,
+deploys), use the job tools instead:
 
-1. Clone this repo to your VPS
-2. Copy `.env.example` to `.env`, fill in:
-   - `API_KEY` - your ForPost auth key (`openssl rand -hex 32`)
-   - `GITHUB_TOKEN` - dedicated bot account token (optional; only needed when
-     `gh` is used inside the tunnel - can be left empty at first)
-3. Build and start, passing the host's docker group GID so the mounted
-   socket is usable by the non-root `forpost` user:
-   ```
-   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
-   ```
-4. Point your domain at the container (reverse proxy + Let's Encrypt)
-5. Add ForPost as an MCP connector in Claude using your domain + API key
+- `run_async(command, mode, timeout)` returns a `job_id` at once.
+- `job_status(job_id, offset)` returns the job's status and the output produced
+  so far from `offset`. Poll it to follow progress; pass the previous
+  `next_offset` next time (that offset also paginates a large output).
+- `job_kill(job_id)` stops it.
 
-The container runs the FastAPI service (`uvicorn app.main:app`) on port 8000
-as the non-root `forpost` user, in the `docker` group, with `/home/forpost`
-persisted on the `forpost_home` volume. `GET /health` is an unauthenticated
-liveness check (used by the container HEALTHCHECK and any reverse proxy).
+The child process writes `stdout`+`stderr` straight to a per-job log file, so
+job output never buffers in ForPost's memory. Job state is in-memory (lost if
+the container restarts; the log files persist). MCP can't push partial output
+mid-call, so following progress is by polling.
 
-## This instance
+## Timeouts and output limits
 
-Deployed at `https://forpost.poly-mind.net` (German Zomro VPS, `/opt/forpost`).
-The container joins the existing `librechat_default` Docker network so the
-shared `LibreChat-NGINX` proxy reaches it as `http://forpost:8000`; TLS is a
-Let's Encrypt cert issued via certbot **standalone**.
+- `execute_command` takes an optional per-call `timeout` (seconds, default 300),
+  clamped to `MAX_TIMEOUT_SECONDS` (default 1800). On timeout the process is
+  killed and partial output returns with `timed_out=true`.
+- The command runs in a worker thread, so a long command never blocks the event
+  loop or `/health`.
+- Output is streamed into a fixed-size ring buffer capped at `MAX_OUTPUT_CHARS`
+  (default 100000, tail kept) — a gigabyte-output command can't spike memory or
+  fill the log.
 
-> **Cert renewal is manual.** The standalone cert needs port 80, which the
-> nginx container holds, so scheduled `certbot renew` fails. Renew before the
-> expiry with:
-> `docker stop LibreChat-NGINX && certbot renew && docker start LibreChat-NGINX`
+## Security & authentication
 
-## Reverse proxy (nginx)
+Two independent layers:
 
-ForPost does **not** expose a host port of its own. All external traffic goes
-through the one shared reverse proxy on the box, the `LibreChat-NGINX`
-container, which terminates TLS for every subdomain (`chat`, `jobs`, `auto`,
-`forpost`). Its config is a single file on the host,
-`/opt/LibreChat/client/nginx.conf`, bind-mounted into the container at
-`/etc/nginx/conf.d/default.conf`.
+1. **ForPost's own auth.** A single static API key, sent as the `X-API-Key`
+   header, checked on **every** request (constant-time comparison) before
+   anything runs. Missing/invalid → `401`, nothing executes or logs. The only
+   unauthenticated route is `GET /health`. The key lives only in
+   `/opt/forpost/.env` on the VPS (`chmod 600`); generate it with
+   `openssl rand -hex 32`. No OAuth, no multi-user, no IP allowlist — the single
+   key is the whole boundary. If it leaks: edit `.env`, `docker compose up -d`.
 
-`forpost.poly-mind.net` is served by two appended `server` blocks:
+2. **The Claude connector.** Requires HTTPS + Streamable-HTTP (both provided),
+   and passes the key via the `X-API-Key` request header (see Quick Start).
 
-```nginx
-server {                                   # HTTP -> HTTPS redirect
-    listen 80;
-    server_name forpost.poly-mind.net;
-    location / { return 301 https://$host$request_uri; }
-}
-server {                                   # TLS termination + proxy
-    listen 443 ssl http2;
-    server_name forpost.poly-mind.net;
-    ssl_certificate     /etc/letsencrypt/live/forpost.poly-mind.net/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/forpost.poly-mind.net/privkey.pem;
-    client_max_body_size 50M;
-    resolver 127.0.0.11 valid=30s;         # docker embedded DNS
-    set $forpost_upstream http://forpost:8000;
-    location / {
-        proxy_pass $forpost_upstream;      # variable -> nginx starts even if
-        proxy_http_version 1.1;            #   forpost is down
-        proxy_read_timeout 1800s;          # match the app's max command timeout
-        proxy_send_timeout 1800s;          #   (nginx default 60s would 504 first)
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header Upgrade $http_upgrade;    # WebSocket / streaming
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
+Additional layers on the VPS: nginx `limit_req`/`limit_conn` (flood &
+brute-force protection, returns 429) and an app-level rate limit
+(`RATE_LIMIT_PER_MINUTE`, default 60) covering both REST and `/mcp`.
 
-Notes:
-- nginx reaches the app **by container name** (`http://forpost:8000`), which
-  only resolves because the forpost container is attached to the
-  `librechat_default` network (see `docker-compose.yml`).
-- `proxy_pass` uses a variable + `resolver` (the same trick the `auto`
-  subdomain uses) so a restart of forpost doesn't take nginx's whole config
-  down with a "host not found in upstream" error.
-- `location /` proxies **all** paths, so once the MCP endpoint (`/mcp`) is
-  live it is reached through the exact same block - no nginx change needed.
-- After editing the config: back it up, run `docker exec LibreChat-NGINX nginx
-  -t`, then `docker exec LibreChat-NGINX nginx -s reload` (graceful, no
-  downtime). Never blind-reload without `nginx -t` - this proxy fronts other
-  live services.
-- The forpost vhost has `limit_req` (20 r/s, burst 40) + `limit_conn` (30) per
-  client IP (zone defined at the top of the config), returning 429. This is
-  the flood / key-brute-force layer and covers all paths including pre-auth,
-  which the app-level rate limiter does not.
-- `proxy_read_timeout` / `proxy_send_timeout` are raised to **1800s** on the
-  forpost vhost to match the app's max command timeout. nginx's default is 60s,
-  which would return **504** on a synchronous command running longer than a
-  minute even though the app is still working. Verified: a 65s command returns
-  200 at ~65s. (For anything genuinely long, prefer the async job tools.)
-
-## Logs
-
-- `logs/commands.jsonl` - every command executed, with mode/exit_code/output
-- `logs/app.log` - service-level operational logs
-
-## Authentication
-
-Two layers, and they are independent:
-
-**1. ForPost's own auth (the app).** A single static API key, sent as the
-`X-API-Key` request header, checked on **every** request before anything else.
-Missing or wrong key -> `401`, nothing executes, nothing is logged to
-`commands.jsonl`. The key is compared in constant time (`hmac.compare_digest`).
-The same key covers all three modes. The only unauthenticated
-route is `GET /health` (so proxies / healthchecks don't need the key). The key
-lives only in `/opt/forpost/.env` on the VPS (`chmod 600`) - generate it with
-`openssl rand -hex 32`. There is deliberately no OAuth, no multi-user, no IP
-allowlist: the single key is the whole security boundary. If it leaks, rotate
-it (edit `.env`, `docker compose up -d`).
-
-**2. Connecting Claude (the MCP connector).** Claude custom connectors require:
-- **HTTPS with a valid cert** - provided by nginx above.
-- **Streamable HTTP transport** at an MCP endpoint (e.g. `/mcp`) - this is what
-  `app/mcp_server.py` serves; wiring it into the deployed container is Phase 5.
-- **Auth passed by Claude.** The connector UI supports either OAuth 2.0 or a
-  static **request header** (beta, allowlisted header names). ForPost's model
-  maps to the header option: configure the connector to send
-  `X-API-Key: <your key>`. If header auth isn't available on your account, the
-  fallback is to put a small OAuth shim in front, or expose `/mcp` unauthenticated
-  and rely on an unguessable path + the reverse proxy (weaker - prefer the header).
-- Once configured on the account, the connector works on **all** Claude
-  clients including mobile - no per-device setup.
-
-## Modes as guardrails
-
-`read-only` and `whitelist` are the guardrails; `full-access` has no extra gate
-(anything runs immediately). Choose read-only or whitelist when you want a brake.
-All three are fully logged regardless.
-
-To keep the guardrails real, read-only and whitelist **reject shell
-metacharacters** (`; | & \` $ ( ) < >`, newlines) so an allowed prefix can't
-smuggle a second command (`ls; rm -rf`). This is protection-from-self, not a
-sandbox - it does not neuter an allowed command's own dangerous flags
-(`find -delete`); use full-access consciously when you need chaining or pipes.
-
-## Timeouts and output
-
-`execute_command` takes an optional per-call `timeout` (seconds, default 300),
-clamped to `MAX_TIMEOUT_SECONDS` (default 1800). The command runs in a worker
-thread, so a long build doesn't block `/health`. Output is streamed into a
-fixed-size ring buffer capped at `MAX_OUTPUT_CHARS` (default 100000, tail
-kept), so even a gigabyte-output command can't spike memory or fill the log.
-
-For tasks that outlive one request (`docker build`, deploys), use the async
-job tools instead of blocking on `execute_command`:
-
-- `run_async(command, mode, timeout)` returns a `job_id` immediately.
-- `job_status(job_id, offset)` returns status + the output produced so far;
-  poll it to follow progress, passing the previous `next_offset` (which also
-  paginates a large output). The child writes straight to a per-job log file,
-  so job output never buffers in memory.
-- `job_kill(job_id)` stops a running job.
-
-Job state is in-memory (lost on restart; the log files persist). MCP can't push
-partial output mid-call, so following progress is by polling.
+> **Security note.** ForPost mounts the host Docker socket and runs as a user in
+> the `docker` group — that's effectively root on the host. Combined with
+> `full-access`, a leaked key means full host compromise. This is intentional
+> for a single-user tool; keep the key secret and rotate on any suspicion.
 
 ## Self-describing MCP
 
-Clients discover everything over MCP: `initialize` returns a usage manual
-(`instructions`), `tools/list` returns each tool's title, schema, and
-annotations (`readOnlyHint` / `destructiveHint` / ...), and a
-`forpost://manual` markdown resource gives a fuller reference.
+Any MCP client can discover ForPost's capabilities over the wire:
 
-## Out of scope
+- `initialize` returns a usage manual in `instructions`.
+- `tools/list` returns each tool's `title`, JSON Schema, and `annotations`
+  (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`).
+- `resources/list` + `resources/read` expose a `forpost://manual` markdown
+  reference.
 
-No multi-user auth, no orchestration dashboard, no automated rollback,
-no database. This is a small personal tool, kept small on purpose.
+## Configuration (`.env`)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `API_KEY` | — (required) | Auth key (`openssl rand -hex 32`). |
+| `GITHUB_TOKEN` | empty | Optional; only needed when `gh` is used inside the tunnel. |
+| `PORT` | 8000 | Container listen port. |
+| `RATE_LIMIT_PER_MINUTE` | 60 | App-level rate limit (runaway-loop guard). |
+| `MAX_TIMEOUT_SECONDS` | 1800 | Hard ceiling a per-call `timeout` is clamped to. |
+| `MAX_OUTPUT_CHARS` | 100000 | Cap on returned/logged output (tail kept). |
+| `MAX_JOB_LOG_BYTES` | 52428800 | Per-async-job log size cap on disk. |
+
+(`WORKSPACE_ROOT`, `LOGS_DIR`, `WHITELIST_PATH` are set by the container.)
+
+## Local development
+
+1. Create a virtualenv, `pip install -r requirements.txt`.
+2. Copy `.env.example` to `.env`, fill with dummy values (e.g.
+   `API_KEY=dev-local-key`) — no real secrets needed locally.
+3. Run: `uvicorn app.main:app --reload`.
+4. Test: `pytest`.
+5. Manual smoke test:
+   ```bash
+   curl -X POST http://localhost:8000/execute \
+     -H "X-API-Key: dev-local-key" -H "Content-Type: application/json" \
+     -d '{"command": "echo hello", "mode": "read-only"}'
+   ```
+
+The MCP endpoint is served at `/mcp` by the same app. Run the MCP server
+standalone with `python -m app.mcp_server` (stdio; set
+`MCP_TRANSPORT=streamable-http` for HTTP).
+
+## Deployment (VPS)
+
+1. Clone the repo to the VPS (e.g. `/opt/forpost`).
+2. Copy `.env.example` → `.env`, set `API_KEY` (and `GITHUB_TOKEN` if needed).
+3. Build & start, passing the host's docker group GID so the mounted socket is
+   usable by the non-root `forpost` user:
+   ```bash
+   DOCKER_GID=$(getent group docker | cut -d: -f3) docker compose up -d --build
+   ```
+4. Put the service behind HTTPS on a subdomain (reverse proxy + Let's Encrypt).
+5. Add the connector in Claude (see [Quick Start](#quick-start--connect-it-to-claude-and-your-phone)).
+
+The container runs `uvicorn app.main:app` on port 8000 as the non-root
+`forpost` user (in the `docker` group), with `/home/forpost` on the
+`forpost_home` volume. `GET /health` is an unauthenticated liveness check.
+
+### This instance
+
+Deployed on a German Zomro VPS in `/opt/forpost`. The container joins the
+existing `librechat_default` Docker network so the shared **`LibreChat-NGINX`**
+reverse proxy reaches it as `http://forpost:8000` and terminates TLS for
+`forpost.poly-mind.net`. The proxy config is a single host file,
+`/opt/LibreChat/client/nginx.conf`. Its forpost vhost adds:
+`limit_req`/`limit_conn` (429 on flood), and `proxy_read_timeout` /
+`proxy_send_timeout` of **1800s** (nginx's 60s default would `504` a long
+synchronous command before the app finished — verified a 65s command returns
+200).
+
+> **Cert renewal is manual.** The Let's Encrypt cert is `certbot standalone`,
+> which needs port 80 — held by the nginx container — so the scheduled
+> `certbot renew` fails. Renew before expiry with:
+> `docker stop LibreChat-NGINX && certbot renew && docker start LibreChat-NGINX`
+
+When editing the shared nginx config: back it up, `docker exec LibreChat-NGINX
+nginx -t`, then `nginx -s reload` (graceful). Never blind-reload — this proxy
+fronts other live services.
+
+## Logs
+
+- `commands.jsonl` — audit trail: every command/file-op, with mode, exit_code,
+  output (truncated to the output cap).
+- `app.log` — service-level operational logs (startup, auth failures, errors).
+
+## Out of scope (by design)
+
+No multi-user auth / OAuth, no orchestration dashboard, no automated
+rollback/snapshots, no database, no IP allowlist. A small personal tool, kept
+small on purpose.

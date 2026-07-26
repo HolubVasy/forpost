@@ -1,5 +1,26 @@
 # ForPost - Specification v1.1 (Final)
 
+## Current State (authoritative, 2026-07-26)
+
+This document also records the **decision history** (dated sections below), where
+some early choices were deliberately superseded. For the current, authoritative
+description use `README.md` and `CLAUDE.md`. In short, as built and deployed:
+
+- **Tools (7):** `execute_command` (sync) + `run_async`/`job_status`/`job_kill`
+  (async jobs for long commands) + `write_file`/`read_file`/`delete_file`.
+  (Supersedes the early "one tool, no write_file, no polling" notes.)
+- **Modes:** read-only / whitelist / full-access; read-only & whitelist also
+  reject shell metacharacters.
+- **Timeout:** per-call `timeout` (default 300s, max `MAX_TIMEOUT_SECONDS`),
+  not a hardcoded 5 min.
+- **Output:** streamed, memory-bounded, capped (`MAX_OUTPUT_CHARS`).
+- **Transport:** FastAPI REST + FastMCP streamable-HTTP at `/mcp`, behind nginx
+  (HTTPS, `limit_req`, `proxy_read_timeout` 1800s). Auth: static `X-API-Key`
+  (constant-time), plus app + nginx rate limits.
+- **MCP self-description:** server `instructions`, per-tool annotations, and a
+  `forpost://manual` resource.
+- **Deployed:** `https://forpost.poly-mind.net` (MCP: `.../mcp/`).
+
 ## Project Goal
 
 Give Claude a simple, secure tunnel into the VPS so infrastructure tasks
