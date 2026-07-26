@@ -15,7 +15,7 @@ checks status. It never writes business code. The agent does everything from the
 prompt — `git clone` / `gh repo create` / code / tests / `git push` / open PR.
 
 ```
-you (phone) → ForPost run_async: docker exec claude-runner task "<prompt>"
+you (phone) → ForPost run_async: docker exec claude-builder task "<prompt>"
                                    → agent: clone/create → code → test → push → PR
 you (phone) → ForPost job_status(job_id)   → running / done / error + output
               → GitHub notifies you of the PR → review → "ForPost, deploy"
@@ -27,7 +27,7 @@ you (phone) → ForPost job_status(job_id)   → running / done / error + output
    ```bash
    claude setup-token
    ```
-2. On the **VPS**, create `.runner.env` (git-ignored) next to the compose files:
+2. On the **VPS**, create `.builder.env` (git-ignored) next to the compose files:
    ```
    CLAUDE_CODE_OAUTH_TOKEN=<the token from step 1>
    GITHUB_TOKEN=<your PERSONAL github token>   # never the work token
@@ -36,7 +36,7 @@ you (phone) → ForPost job_status(job_id)   → running / done / error + output
    ```
 3. Build & start the one yard (opt-in; separate from the ForPost deploy):
    ```bash
-   docker compose -f docker-compose.runner.yml up -d --build
+   docker compose -f docker-compose.builder.yml up -d --build
    ```
 
 ## Use it — everything through ForPost (no terminal, phone-friendly)
@@ -45,7 +45,7 @@ Fire a task as a background job and follow it:
 
 ```
 # ask:
-docker exec claude-runner task "create private repo todo-api, build a FastAPI
+docker exec claude-builder task "create private repo todo-api, build a FastAPI
 todo service with tests, push, and open a PR with a short summary"
 # check:  ForPost job_status(job_id) -> status + output;  PR notifies your phone
 ```
@@ -54,7 +54,7 @@ todo service with tests, push, and open a PR with a short summary"
 
 - **Automatic:** each task runs in a fresh `/work/task.XXXX`; the wrapper prunes
   task dirs older than `TASK_RETENTION_DAYS` (default 2) on each run — no cron.
-- **On demand:** `docker exec claude-runner clean` wipes all task workspaces.
+- **On demand:** `docker exec claude-builder clean` wipes all task workspaces.
 
 ## Guardrails (why there's no bungling)
 

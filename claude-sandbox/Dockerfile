@@ -1,6 +1,6 @@
 # Sandboxed autonomous Claude Code agent (POC).
 #
-# ForPost (full-access) drives it:  docker exec claude-runner task "<goal>"
+# ForPost (full-access) drives it:  docker exec claude-builder task "<goal>"
 # It clones a repo into /work, edits, tests, commits and PUSHES a branch - then
 # ForPost deploys the solution from git as a SEPARATE container.
 #
@@ -24,14 +24,14 @@ RUN apt-get update \
  && npm install -g @anthropic-ai/claude-code
 
 # Non-root user in its own home. bypassPermissions will not run as root.
-RUN useradd -m -s /bin/bash runner
+RUN useradd -m -s /bin/bash builder
 COPY task clean /usr/local/bin/
 RUN chmod +x /usr/local/bin/task /usr/local/bin/clean
 
-USER runner
+USER builder
 WORKDIR /work
-RUN git config --global user.name "claude-runner" \
- && git config --global user.email "runner@localhost"
+RUN git config --global user.name "claude-builder" \
+ && git config --global user.email "builder@localhost"
 
 # Idle; ForPost execs `task "<goal>"` into it per request.
 CMD ["sleep", "infinity"]

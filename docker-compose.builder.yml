@@ -1,0 +1,22 @@
+# Opt-in sandboxed Claude Code builder (variant A: one persistent container).
+# Separate from the ForPost deploy on purpose - bring it up only when wanted:
+#   docker compose -f docker-compose.builder.yml up -d --build
+# Drive it from ForPost (full-access):
+#   docker exec claude-builder task "<goal>"
+services:
+  claude-builder:
+    build: ./claude-sandbox
+    image: claude-builder:latest
+    container_name: claude-builder
+    restart: unless-stopped
+    env_file:
+      - .builder.env           # CLAUDE_CODE_OAUTH_TOKEN + personal GITHUB_TOKEN
+    working_dir: /work
+    volumes:
+      - builder_work:/work     # the agent's scratch/clones (no host mounts)
+    # Deliberately NO /var/run/docker.sock and NO host bind mounts -> sandbox.
+    mem_limit: 2g
+    cpus: "1.5"
+
+volumes:
+  builder_work:
