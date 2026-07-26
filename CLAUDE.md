@@ -34,11 +34,13 @@ bash/git/gh/docker-compose, FastAPI + MCP wrapper, Caddy/nginx for HTTPS.
 
 ## Deployment status
 
-Phases 1-4 done. Live at `https://forpost.poly-mind.net` (German Zomro VPS
-`188.137.227.248`, code in `/opt/forpost`), running the FastAPI REST service
-behind the shared `LibreChat-NGINX` proxy on the `librechat_default` network.
-Phase 5 (expose the MCP streamable-http endpoint `/mcp` and register it as a
-Claude custom connector) is in progress. Cert renew is manual - see `PLAN.md`.
+Phases 1-4 done, Phase 5 in progress. Live at `https://forpost.poly-mind.net`
+(German Zomro VPS `188.137.227.248`, code in `/opt/forpost`) behind the shared
+`LibreChat-NGINX` proxy on the `librechat_default` network. The app serves both
+REST (`/health`, `/execute`, file ops) and the MCP streamable-HTTP endpoint at
+`/mcp` (guarded by `X-API-Key`). Remaining Phase 5: register the Claude custom
+connector (`/mcp/` + `X-API-Key` header) and run the end-to-end mode tests.
+Cert renew is manual - see `PLAN.md`.
 
 ## Local Development Environment
 

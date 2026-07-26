@@ -111,12 +111,19 @@ needs port 80 free, but `LibreChat-NGINX` holds it — so the scheduled
 before 2026-10-24 (and add to any renewal cron):
 `docker stop LibreChat-NGINX && certbot renew && docker start LibreChat-NGINX`.
 
-## Phase 5: Integration
+## Phase 5: Integration (in progress)
 
 Goal: ForPost usable from Claude chat, end to end.
 
-- [ ] Connect ForPost as MCP connector in Claude
-- [ ] Test read-only mode (docker ps, logs)
+- [x] Expose the MCP endpoint: FastMCP streamable-HTTP mounted at `/mcp`
+      alongside REST, guarded by `X-API-Key` (ASGI `MCPApiKeyGuard`), DNS-
+      rebinding Host check disabled (behind nginx). Live and verified:
+      `https://forpost.poly-mind.net/mcp/` returns 401 without key, and
+      `initialize` + `tools/list` (4 tools) with the key. 101 tests green.
+- [ ] Connect ForPost as MCP custom connector in Claude — URL
+      `https://forpost.poly-mind.net/mcp/`, request header `X-API-Key: <key>`
+      (from `/opt/forpost/.env`). User-side UI step.
+- [ ] Test read-only mode (docker ps, logs) from Claude chat / mobile
 - [ ] Test whitelist mode (git pull, docker restart on a test container)
 - [ ] Test full-access mode (one-off command)
 - [ ] First real task: deploy BriefDay v0 through ForPost
