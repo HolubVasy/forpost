@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Run one autonomous Claude Code task headlessly.  Usage:  task "<goal>"
 #
-# Auth: CLAUDE_CODE_OAUTH_TOKEN (Claude subscription; run `claude setup-token`
-# once to mint it). No --bare: it bypasses the OAuth token.
-# Git: the personal GITHUB_TOKEN is fed to git via a credential helper that
-# reads it from the environment (never written to disk).
+# The agent itself does the business (git clone / gh repo create / code / tests /
+# push / PR) from the prompt - ForPost only relays this string and later checks
+# job_status. Each task runs in its OWN fresh dir under /work, so tasks never
+# collide and are trivial to clean.
+#
+# Auth: CLAUDE_CODE_OAUTH_TOKEN (Claude subscription; `claude setup-token`).
+# No --bare: it bypasses the OAuth token.
 set -euo pipefail
 
 if [ -z "${1:-}" ]; then
@@ -12,10 +15,20 @@ if [ -z "${1:-}" ]; then
   exit 2
 fi
 
+# Auto-clean: drop task dirs older than the retention window (default 2 days),
+# opportunistically, so the yard self-cleans without a cron.
+find /work -maxdepth 1 -name 'task.*' -type d \
+  -mtime "+${TASK_RETENTION_DAYS:-2}" -exec rm -rf {} + 2>/dev/null || true
+
+# Feed the personal GitHub token to git via env only (never written to disk).
 if [ -n "${GITHUB_TOKEN:-}" ]; then
   git config --global credential.helper \
     '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN}"; }; f'
 fi
+
+# Fresh, isolated working dir per task.
+workdir=$(mktemp -d /work/task.XXXXXX)
+cd "$workdir"
 
 exec claude -p "$*" \
   --permission-mode bypassPermissions \

@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Wipe all task workspaces on demand. From ForPost (full-access):
+#   docker exec claude-runner clean
+set -euo pipefail
+rm -rf /work/task.* 2>/dev/null || true
+echo "cleaned: /work/task.* removed"
