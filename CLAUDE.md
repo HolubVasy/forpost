@@ -59,16 +59,23 @@ Ubuntu-based Docker container, non-root `forpost` user in the `docker` group,
 bash/git/gh/docker-compose, FastAPI + FastMCP (streamable-HTTP at `/mcp`),
 fronted by nginx for HTTPS.
 
+`mcp` is pinned below 2 (`mcp>=1.2.0,<2`). mcp 2.x renamed FastMCP to
+MCPServer (`mcp.server.fastmcp` is gone), so an unpinned rebuild installs 2.x and
+`app/mcp_server.py` dies on import. Moving to 2.x is a deliberate port, not a bump.
+
 ## Deployment status
 
 Phases 1–5 done and **live** at `https://forpost.poly-mind.net` (German Zomro
-VPS `188.137.227.248`, code in `/opt/forpost`) behind the shared
+VPS `145.63.130.166` since 2026-09-19, code in `/opt/forpost`; the former
+`188.137.227.248` was deleted on 2026-09-22) behind the shared
 `LibreChat-NGINX` proxy on the `librechat_default` network. The app serves REST
 (`/health`, `/execute`, file ops, jobs, `/diagnostics`, `/reset`) and the MCP
 endpoint `/mcp` (guarded by `X-API-Key` **or** Google-OIDC bearer + rate limit).
 The Claude Desktop connector is **registered and working via Google OIDC**
 (email allow-list). `gh` runs with two accounts' tokens (personal repo-create,
-work PR read-only). Cert renewal is manual — see `README.md` / `SPEC.md`.
+work PR read-only). Cert renewal is automatic: host `certbot.timer` in standalone
+mode, with `/etc/letsencrypt/renewal-hooks/` stopping and starting
+`LibreChat-NGINX` around it; `ufw` allows 80/tcp for the challenge.
 
 ## Testing
 
